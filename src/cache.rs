@@ -28,6 +28,22 @@ use crate::lock::LockEntry;
 /// with `curl`. The artifact is verified against its SHA-256 digest before it
 /// is atomically installed in the cache. Network access and filesystem writes
 /// are side effects of this operation.
+///
+/// # Parameters
+///
+/// - `entry`: Validated tool metadata describing the expected artifact and
+///   target platform.
+///
+/// # Returns
+///
+/// The executable path in the cache. A cached file is reused only when its
+/// digest matches the locked SHA-256 value.
+///
+/// # Errors
+///
+/// Returns an error when the current host does not match the entry, the cache
+/// cannot be accessed, the artifact cannot be copied or downloaded, its digest
+/// does not match, or installation fails.
 pub fn ensure(entry: &LockEntry) -> Result<PathBuf> {
     let target = env::var("RS_INFRA_TARGET").unwrap_or_else(|_| host_target().to_owned());
     if entry.target != target {
@@ -72,6 +88,11 @@ pub fn ensure(entry: &LockEntry) -> Result<PathBuf> {
 }
 
 /// Returns the target triple supported by the current host, or `unsupported`.
+///
+/// # Returns
+///
+/// The target triple for the supported architecture and operating-system
+/// combinations, or `unsupported` when the host is not recognized.
 fn host_target() -> &'static str {
     match (std::env::consts::ARCH, std::env::consts::OS) {
         ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
@@ -85,6 +106,20 @@ fn host_target() -> &'static str {
 }
 
 /// Builds the cache path for a locked artifact.
+///
+/// # Parameters
+///
+/// - `entry`: Validated artifact metadata whose name, revision, and target
+///   determine the path components.
+///
+/// # Returns
+///
+/// The artifact path below the configured cache root.
+///
+/// # Errors
+///
+/// Returns an error when none of `RS_INFRA_CACHE_DIR`, `XDG_CACHE_HOME`, or
+/// `HOME` is set.
 fn cache_path(entry: &LockEntry) -> Result<PathBuf> {
     let root = env::var_os("RS_INFRA_CACHE_DIR")
         .map(PathBuf::from)
@@ -100,6 +135,16 @@ fn cache_path(entry: &LockEntry) -> Result<PathBuf> {
 }
 
 /// Copies or downloads an artifact to a temporary destination.
+///
+/// # Parameters
+///
+/// - `entry`: Validated metadata describing the local or HTTPS source.
+/// - `destination`: Temporary path that receives the artifact bytes.
+///
+/// # Errors
+///
+/// Returns an error when the local copy fails, `curl` cannot start, or the
+/// HTTPS download exits unsuccessfully.
 fn download(entry: &LockEntry, destination: &Path) -> Result<()> {
     if let Some(path) = entry.source.strip_prefix("file://") {
         fs::copy(path, destination)
@@ -131,6 +176,18 @@ fn download(entry: &LockEntry, destination: &Path) -> Result<()> {
 }
 
 /// Computes the lowercase SHA-256 digest of a file.
+///
+/// # Parameters
+///
+/// - `path`: File whose complete contents are read and hashed.
+///
+/// # Returns
+///
+/// The lowercase hexadecimal SHA-256 digest.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be opened or read.
 fn digest(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -146,6 +203,15 @@ fn digest(path: &Path) -> Result<String> {
 }
 
 /// Adds executable permissions to a cached artifact on Unix.
+///
+/// # Parameters
+///
+/// - `path`: Existing artifact whose owner, group, and other execute bits are
+///   set to `755`.
+///
+/// # Errors
+///
+/// Returns an error when metadata lookup or permission update fails.
 #[cfg(unix)]
 fn make_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -156,6 +222,15 @@ fn make_executable(path: &Path) -> Result<()> {
 }
 
 /// Leaves executable permissions unchanged on non-Unix platforms.
+///
+/// # Parameters
+///
+/// - `_path`: Artifact path, intentionally unused because this platform has no
+///   Unix permission update in this implementation.
+///
+/// # Returns
+///
+/// Always succeeds without changing the artifact.
 #[cfg(not(unix))]
 fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
@@ -165,6 +240,20 @@ fn make_executable(_path: &Path) -> Result<()> {
 ///
 /// The child process inherits the caller's standard streams. If the process
 /// terminates without an exit code, this returns `1`.
+///
+/// # Parameters
+///
+/// - `path`: Verified executable to start.
+/// - `args`: Arguments passed to the child process unchanged.
+///
+/// # Returns
+///
+/// The child's exit code, or `1` when it terminates without one.
+///
+/// # Errors
+///
+/// Returns an error when the operating system cannot start or wait for the
+/// child process.
 pub fn run(path: &Path, args: &[String]) -> Result<i32> {
     let status = Command::new(path).args(args).status()?;
     Ok(status.code().unwrap_or(1))

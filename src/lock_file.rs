@@ -50,6 +50,21 @@ impl LockFile {
     /// Returns an error when the file cannot be read, a record does not have
     /// five fields, an entry is invalid, or a tool name is duplicated. This
     /// method performs filesystem I/O.
+    ///
+    /// # Parameters
+    ///
+    /// - `path`: Lock-file path to read as UTF-8 text.
+    ///
+    /// # Returns
+    ///
+    /// A lock file containing every non-comment, non-empty record after
+    /// validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the file cannot be read as UTF-8, a record does
+    /// not contain exactly five fields, an entry is invalid, or a tool name is
+    /// duplicated.
     pub fn read(path: &Path) -> Result<Self> {
         let text = fs::read_to_string(path)
             .with_context(|| format!("failed to read lock file {}", path.display()))?;
@@ -85,6 +100,18 @@ impl LockFile {
     ///
     /// Returns an error when no entry has that tool name. The returned entry
     /// is borrowed from this lock file and remains valid while it is borrowed.
+    ///
+    /// # Parameters
+    ///
+    /// - `name`: Tool name to find in the validated entry map.
+    ///
+    /// # Returns
+    ///
+    /// A shared reference to the matching entry while `self` remains borrowed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when no entry has the requested tool name.
     #[must_use = "the lock lookup result must be handled"]
     pub fn entry(&self, name: &str) -> Result<&LockEntry> {
         self.entries
@@ -94,6 +121,15 @@ impl LockFile {
 }
 
 /// Validates the fields that identify and verify one locked artifact.
+///
+/// # Parameters
+///
+/// - `entry`: Artifact metadata to validate without modifying it.
+///
+/// # Errors
+///
+/// Returns an error when the name, revision, digest, source, or target violates
+/// the lock-file field constraints.
 fn validate_entry(entry: &LockEntry) -> Result<()> {
     if entry.name.is_empty() || entry.name.contains('/') {
         bail!("tool name must be a non-empty simple name");

@@ -5,6 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Command-line entry point for `rs-infra-tools`.
+
 use std::path::PathBuf;
 
 use anyhow::Result;
@@ -52,6 +54,16 @@ enum Command {
 ///
 /// Returns an error when the lock file or tool cannot be ensured. The `exec`
 /// command exits with the child process's status code.
+///
+/// # Returns
+///
+/// `Ok(())` after the `ensure` command prints its executable path. The `exec`
+/// command terminates the process with the child exit code instead.
+///
+/// # Errors
+///
+/// Returns an error when argument processing succeeds but lock-file loading,
+/// artifact installation, or process execution fails.
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {

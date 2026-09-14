@@ -26,14 +26,15 @@
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockEntry {
-    /// The tool's simple executable name.
+    /// The tool's non-empty simple executable name without path separators.
     pub name: String,
-    /// The HTTPS or local `file://` artifact source.
+    /// The HTTPS or local `file://` source of the directly executable artifact.
     pub source: String,
-    /// The 40-character Git revision used for cache isolation.
+    /// The 40-character hexadecimal Git revision used for cache isolation.
     pub revision: String,
-    /// The target triple for which the artifact was built.
+    /// The non-empty target triple for which the artifact was built.
     pub target: String,
-    /// The expected lowercase or uppercase hexadecimal SHA-256 digest.
+    /// The expected 64-character lowercase or uppercase hexadecimal SHA-256
+    /// digest of the artifact.
     pub sha256: String,
 }
