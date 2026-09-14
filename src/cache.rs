@@ -1,16 +1,33 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Content-addressed-enough per-tool cache and artifact verification.
 
 use std::env;
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
+use anyhow::Context;
+use anyhow::Result;
+use anyhow::bail;
+use sha2::Digest;
+use sha2::Sha256;
 
 use crate::lock::LockEntry;
 
+/// Ensures that the locked artifact is present, verified, and executable.
+///
+/// A local `file://` source is copied directly; an HTTPS source is downloaded
+/// with `curl`. The artifact is verified against its SHA-256 digest before it
+/// is atomically installed in the cache. Network access and filesystem writes
+/// are side effects of this operation.
 pub fn ensure(entry: &LockEntry) -> Result<PathBuf> {
     let target = env::var("RS_INFRA_TARGET").unwrap_or_else(|_| host_target().to_owned());
     if entry.target != target {
@@ -54,6 +71,7 @@ pub fn ensure(entry: &LockEntry) -> Result<PathBuf> {
     Ok(cache_path)
 }
 
+/// Returns the target triple supported by the current host, or `unsupported`.
 fn host_target() -> &'static str {
     match (std::env::consts::ARCH, std::env::consts::OS) {
         ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
@@ -66,6 +84,7 @@ fn host_target() -> &'static str {
     }
 }
 
+/// Builds the cache path for a locked artifact.
 fn cache_path(entry: &LockEntry) -> Result<PathBuf> {
     let root = env::var_os("RS_INFRA_CACHE_DIR")
         .map(PathBuf::from)
@@ -80,6 +99,7 @@ fn cache_path(entry: &LockEntry) -> Result<PathBuf> {
         .join(&entry.name))
 }
 
+/// Copies or downloads an artifact to a temporary destination.
 fn download(entry: &LockEntry, destination: &Path) -> Result<()> {
     if let Some(path) = entry.source.strip_prefix("file://") {
         fs::copy(path, destination)
@@ -110,6 +130,7 @@ fn download(entry: &LockEntry, destination: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Computes the lowercase SHA-256 digest of a file.
 fn digest(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -124,6 +145,7 @@ fn digest(path: &Path) -> Result<String> {
     Ok(format!("{:x}", hasher.finalize()))
 }
 
+/// Adds executable permissions to a cached artifact on Unix.
 #[cfg(unix)]
 fn make_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
@@ -133,11 +155,16 @@ fn make_executable(path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Leaves executable permissions unchanged on non-Unix platforms.
 #[cfg(not(unix))]
 fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Runs a verified tool and returns its process exit code.
+///
+/// The child process inherits the caller's standard streams. If the process
+/// terminates without an exit code, this returns `1`.
 pub fn run(path: &Path, args: &[String]) -> Result<i32> {
     let status = Command::new(path).args(args).status()?;
     Ok(status.code().unwrap_or(1))
@@ -145,8 +172,13 @@ pub fn run(path: &Path, args: &[String]) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::env;
     use std::io::Write;
+
+    use crate::lock::LockEntry;
+
+    use super::digest;
+    use super::ensure;
 
     #[test]
     fn local_artifact_is_cached_and_reused() {
