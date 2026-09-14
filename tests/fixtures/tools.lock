@@ -1,0 +1,2 @@
+# name source revision target sha256
+fake-tool file:///home/starfish/working/qubit/rust-infra/rs-infra-tools/tests/fixtures/fake-tool 0123456789abcdef0123456789abcdef01234567 x86_64-unknown-linux-gnu 1b9edb479d7abfa5daab12d02be2c2391d4f2b7f8daf56991b41cd26ded4d4c5

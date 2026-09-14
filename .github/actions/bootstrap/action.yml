@@ -1,0 +1,22 @@
+name: Bootstrap rs-infra-tools
+description: Verify and expose a locked rs-infra-tools executable
+inputs:
+  lock:
+    description: Path to the project's tools.lock file
+    required: true
+outputs:
+  executable:
+    description: Absolute path to rs-infra-tools
+    value: ${{ steps.ensure.outputs.executable }}
+runs:
+  using: composite
+  steps:
+    - id: ensure
+      shell: bash
+      run: |
+        set -euo pipefail
+        package_root="${{ github.action_path }}/../../.."
+        cargo install --locked --path "$package_root" --force
+        executable="$HOME/.cargo/bin/rs-infra-tools"
+        test -x "$executable"
+        echo "executable=$executable" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,22 @@
+[package]
+name = "qubit-infra-tools"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+description = "Locked installer and executor for Rust infrastructure tools"
+repository = "https://github.com/qubit-ltd/rs-infra-tools"
+homepage = "https://qubit-ltd.github.io/rs-infra-tools/"
+readme = "README.md"
+
+[[bin]]
+name = "rs-infra-tools"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+sha2 = "0.10"
+
+[dev-dependencies]
+tempfile = "3"
