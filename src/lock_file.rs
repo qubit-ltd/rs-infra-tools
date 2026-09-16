@@ -66,8 +66,7 @@ impl LockFile {
     /// not contain exactly five fields, an entry is invalid, or a tool name is
     /// duplicated.
     pub fn read(path: &Path) -> Result<Self> {
-        let text = fs::read_to_string(path)
-            .with_context(|| format!("failed to read lock file {}", path.display()))?;
+        let text = fs::read_to_string(path).with_context(|| format!("failed to read lock file {}", path.display()))?;
         let mut entries = BTreeMap::new();
 
         for (line_number, raw_line) in text.lines().enumerate() {
@@ -86,8 +85,7 @@ impl LockFile {
                 target: fields[3].to_owned(),
                 sha256: fields[4].to_owned(),
             };
-            validate_entry(&entry)
-                .with_context(|| format!("invalid lock entry on line {}", line_number + 1))?;
+            validate_entry(&entry).with_context(|| format!("invalid lock entry on line {}", line_number + 1))?;
             if entries.insert(entry.name.clone(), entry).is_some() {
                 bail!("duplicate tool on line {}", line_number + 1);
             }
@@ -161,9 +159,7 @@ mod tests {
         let path = directory.path().join("tools.lock");
         fs::write(
             &path,
-            format!(
-                "# comment\nrs-infra-style file:///style {REVISION} x86_64-unknown-linux-gnu {SHA}\n"
-            ),
+            format!("# comment\nrs-infra-style file:///style {REVISION} x86_64-unknown-linux-gnu {SHA}\n"),
         )
         .unwrap();
         let lock = LockFile::read(&path).unwrap();

@@ -60,8 +60,7 @@ pub fn ensure(entry: &LockEntry) -> Result<PathBuf> {
     }
 
     let parent = cache_path.parent().context("cache path has no parent")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create cache directory {}", parent.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("failed to create cache directory {}", parent.display()))?;
     let temporary = parent.join(format!(".{}.tmp-{}", entry.name, std::process::id()));
     if temporary.exists() {
         fs::remove_file(&temporary)?;
@@ -77,13 +76,8 @@ pub fn ensure(entry: &LockEntry) -> Result<PathBuf> {
         );
     }
     make_executable(&temporary)?;
-    fs::rename(&temporary, &cache_path).with_context(|| {
-        format!(
-            "failed to install {} at {}",
-            entry.name,
-            cache_path.display()
-        )
-    })?;
+    fs::rename(&temporary, &cache_path)
+        .with_context(|| format!("failed to install {} at {}", entry.name, cache_path.display()))?;
     Ok(cache_path)
 }
 
@@ -147,8 +141,7 @@ fn cache_path(entry: &LockEntry) -> Result<PathBuf> {
 /// HTTPS download exits unsuccessfully.
 fn download(entry: &LockEntry, destination: &Path) -> Result<()> {
     if let Some(path) = entry.source.strip_prefix("file://") {
-        fs::copy(path, destination)
-            .with_context(|| format!("failed to copy local artifact {path}"))?;
+        fs::copy(path, destination).with_context(|| format!("failed to copy local artifact {path}"))?;
         return Ok(());
     }
 
@@ -264,10 +257,9 @@ mod tests {
     use std::env;
     use std::io::Write;
 
-    use crate::lock::LockEntry;
-
     use super::digest;
     use super::ensure;
+    use crate::lock::LockEntry;
 
     #[test]
     fn local_artifact_is_cached_and_reused() {

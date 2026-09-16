@@ -1,7 +1,8 @@
 use std::fs;
 use std::process::Command;
 
-use sha2::{Digest, Sha256};
+use sha2::Digest;
+use sha2::Sha256;
 
 const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 const TARGET: &str = "x86_64-unknown-linux-gnu";
@@ -37,11 +38,7 @@ fn ensure_reports_success_without_corrupting_path_output() {
         .unwrap();
 
     assert!(output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stdout)
-            .trim()
-            .ends_with("/tool")
-    );
+    assert!(String::from_utf8_lossy(&output.stdout).trim().ends_with("/tool"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("ensure 'tool' succeeded"));
 }
 
