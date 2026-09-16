@@ -50,31 +50,41 @@ enum Command {
     },
 }
 
-/// Parses options and executes the selected infrastructure-tool operation.
-///
-/// Returns an error when the lock file or tool cannot be ensured. The `exec`
-/// command exits with the child process's status code.
-///
-/// # Returns
-///
-/// `Ok(())` after the `ensure` command prints its executable path. The `exec`
-/// command terminates the process with the child exit code instead.
-///
-/// # Errors
-///
-/// Returns an error when argument processing succeeds but lock-file loading,
-/// artifact installation, or process execution fails.
-fn main() -> Result<()> {
+/// Parses options, executes the selected operation, and always reports its
+/// final status before exiting.
+fn main() {
     let cli = Cli::parse();
-    match cli.command {
+    let result = execute(cli.command);
+
+    match result {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("rs-infra-tools: failed: {error:#}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn execute(command: Command) -> Result<i32> {
+    match command {
         Command::Ensure { lock, tool } => {
-            println!("{}", ensure(&lock, &tool)?.display());
+            let executable = ensure(&lock, &tool)?;
+            // Keep the path on stdout: shell wrappers use it as a command
+            // substitution. Status messages go to stderr so they remain
+            // visible without changing that interface.
+            println!("{}", executable.display());
+            eprintln!("rs-infra-tools: ensure '{tool}' succeeded");
+            Ok(0)
         }
         Command::Exec { lock, tool, args } => {
             let executable = ensure(&lock, &tool)?;
             let code = cache::run(&executable, &args)?;
-            std::process::exit(code);
+            if code == 0 {
+                eprintln!("rs-infra-tools: exec '{tool}' succeeded (exit code 0)");
+            } else {
+                eprintln!("rs-infra-tools: exec '{tool}' failed (exit code {code})");
+            }
+            Ok(code)
         }
     }
-    Ok(())
 }
