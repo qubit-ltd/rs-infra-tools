@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+exec "$project_root/.infra/tools/infra-tool.sh" rs-infra-coverage --project "$project_root" collect "$@"
