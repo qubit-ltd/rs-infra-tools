@@ -39,7 +39,7 @@ fn ensure_reports_success_without_corrupting_path_output() {
 
     assert!(output.status.success());
     assert!(String::from_utf8_lossy(&output.stdout).trim().ends_with("/tool"));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("ensure 'tool' succeeded"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("✅ rs-infra-tools: ensure 'tool' succeeded"));
 }
 
 #[test]
@@ -69,7 +69,7 @@ fn exec_reports_child_failure_and_preserves_exit_code() {
         .unwrap();
 
     assert_eq!(output.status.code(), Some(7));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("exec 'tool' failed (exit code 7)"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("❌ rs-infra-tools: exec 'tool' failed (exit code 7)"));
 }
 
 #[test]
@@ -84,5 +84,5 @@ fn invalid_lock_reports_failure_message() {
         .unwrap();
 
     assert_eq!(output.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&output.stderr).contains("rs-infra-tools: failed:"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("❌ rs-infra-tools: failed:"));
 }

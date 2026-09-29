@@ -59,7 +59,7 @@ fn main() {
     match result {
         Ok(code) => std::process::exit(code),
         Err(error) => {
-            eprintln!("rs-infra-tools: failed: {error:#}");
+            eprintln!("❌ rs-infra-tools: failed: {error:#}");
             std::process::exit(1);
         }
     }
@@ -73,16 +73,16 @@ fn execute(command: Command) -> Result<i32> {
             // substitution. Status messages go to stderr so they remain
             // visible without changing that interface.
             println!("{}", executable.display());
-            eprintln!("rs-infra-tools: ensure '{tool}' succeeded");
+            eprintln!("✅ rs-infra-tools: ensure '{tool}' succeeded");
             Ok(0)
         }
         Command::Exec { lock, tool, args } => {
             let executable = ensure(&lock, &tool)?;
             let code = cache::run(&executable, &args)?;
             if code == 0 {
-                eprintln!("rs-infra-tools: exec '{tool}' succeeded (exit code 0)");
+                eprintln!("✅ rs-infra-tools: exec '{tool}' succeeded (exit code 0)");
             } else {
-                eprintln!("rs-infra-tools: exec '{tool}' failed (exit code {code})");
+                eprintln!("❌ rs-infra-tools: exec '{tool}' failed (exit code {code})");
             }
             Ok(code)
         }
