@@ -25,9 +25,17 @@ cargo run --manifest-path /path/to/rs-infra-tools/Cargo.toml -- --help
 
 The project's `.infra` configuration remains the source of truth; this tool does not copy project configuration into the tool repository.
 
+Projects can also synchronize the shared shell entry points bundled with the pinned `rs-infra-tools` revision:
+
+```bash
+rs-infra-tools sync-scripts --project /path/to/project
+```
+
+This updates only `.infra/bin/update-infra.sh`, `.infra/bin/infra-tool.sh`, and the shared `.infra/lib` scripts.
+
 ## Capabilities and limitations
 
-This first release provides the focused behavior described above. It is intentionally a small building block: project-specific policy belongs in `.infra`, and orchestration belongs in `rs-infra-ci`. It does not promise compatibility with the legacy `rs-ci` scripts beyond the commands currently covered by tests.
+The tool provides locked binary installation and execution, plus revision-pinned synchronization of shared `.infra` shell scripts. Project-specific policy remains in the consuming project's `.infra` configuration.
 
 ## Learn More
 

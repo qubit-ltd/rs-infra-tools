@@ -15,6 +15,8 @@ use clap::Subcommand;
 use qubit_infra_tools::cache;
 use qubit_infra_tools::ensure;
 
+mod sync_scripts;
+
 /// Command-line options for `rs-infra-tools`.
 #[derive(Debug, Parser)]
 #[command(name = "rs-infra-tools")]
@@ -47,6 +49,12 @@ enum Command {
         /// Arguments passed to the executable.
         #[arg(last = true)]
         args: Vec<String>,
+    },
+    /// Installs the project-managed rs-infra shell scripts.
+    SyncScripts {
+        /// Project root containing the `.infra` directory.
+        #[arg(long)]
+        project: PathBuf,
     },
 }
 
@@ -85,6 +93,11 @@ fn execute(command: Command) -> Result<i32> {
                 eprintln!("❌ rs-infra-tools: exec '{tool}' failed (exit code {code})");
             }
             Ok(code)
+        }
+        Command::SyncScripts { project } => {
+            sync_scripts::sync(&project)?;
+            eprintln!("✅ rs-infra-tools: project scripts synchronized");
+            Ok(0)
         }
     }
 }

@@ -25,9 +25,17 @@ cargo run --manifest-path /path/to/rs-infra-tools/Cargo.toml -- --help
 
 项目的 `.infra` 配置仍然是行为的唯一来源；工具仓库不会复制项目配置。具体策略由项目配置决定。
 
+项目也可以从当前 pin 的 `rs-infra-tools` revision 同步共享 Shell 脚本：
+
+```bash
+rs-infra-tools sync-scripts --project /path/to/project
+```
+
+该命令只更新 `.infra/bin/update-infra.sh`、`.infra/bin/infra-tool.sh` 和 `.infra/lib` 中的公共脚本。
+
 ## 能力与限制
 
-当前版本只提供上文列出的专门能力，刻意保持为小型基础设施组件：项目策略放在 `.infra`，任务编排交给 `rs-infra-ci`。对于旧版 `rs-ci` 脚本，只有测试覆盖的命令可视为兼容。
+工具提供受 pin 约束的二进制安装与执行，并能按 revision 同步 `.infra` 公共 Shell 脚本。项目专属策略仍由使用方的 `.infra` 配置维护。
 
 ## 延伸阅读
 
