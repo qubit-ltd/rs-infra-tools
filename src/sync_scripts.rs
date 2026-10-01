@@ -28,9 +28,9 @@ const SCRIPTS: &[(&str, &str)] = &[
 
 /// Writes the pinned shared rs-infra scripts into a project.
 ///
-/// Existing files at the four managed paths are replaced; all other project
-/// files are left untouched. Returns an error with the affected path when a
-/// managed file is a symlink or cannot be written.
+/// Existing managed scripts are replaced and legacy generated binaries are
+/// removed; unrelated project files are left untouched. Returns an error with
+/// the affected path when a managed file is a symlink or cannot be written.
 pub(super) fn sync(project: &Path) -> Result<()> {
     let project = project
         .canonicalize()
@@ -51,11 +51,30 @@ pub(super) fn sync(project: &Path) -> Result<()> {
         }
         let parent = path.parent().context("managed script has no parent directory")?;
         fs::create_dir_all(parent).with_context(|| format!("unable to create {}", parent.display()))?;
-        fs::write(&path, content).with_context(|| format!("unable to write {}", path.display()))?;
-        ensure_executable(&path)?;
+        write_atomically(&path, content)?;
     }
     remove_legacy_tool_artifacts(&project)?;
     Ok(())
+}
+
+/// Replaces a managed script atomically so a running updater can keep reading
+/// its old inode.
+fn write_atomically(path: &Path, content: &str) -> Result<()> {
+    let parent = path.parent().context("managed script has no parent directory")?;
+    let file_name = path
+        .file_name()
+        .context("managed script has no filename")?
+        .to_string_lossy();
+    let temporary = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
+    let result = (|| {
+        fs::write(&temporary, content).with_context(|| format!("unable to write {}", temporary.display()))?;
+        ensure_executable(&temporary)?;
+        fs::rename(&temporary, path).with_context(|| format!("unable to replace managed script {}", path.display()))
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 /// Removes generated files from the former shared `.infra/tools/bin/bin`
