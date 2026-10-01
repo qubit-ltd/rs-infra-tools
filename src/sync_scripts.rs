@@ -16,6 +16,10 @@ use anyhow::bail;
 
 const SCRIPTS: &[(&str, &str)] = &[
     (
+        ".infra/bin/ci-check.sh",
+        include_str!("../assets/project-infra/bin/ci-check.sh"),
+    ),
+    (
         ".infra/bin/update-infra.sh",
         include_str!("../assets/project-infra/bin/update-infra.sh"),
     ),
@@ -148,6 +152,30 @@ mod tests {
     use std::fs;
 
     use super::remove_legacy_tool_artifacts;
+    use super::sync;
+
+    /// Verifies the shared updater installs the CI entry point used by
+    /// migration.
+    #[test]
+    fn test_sync_installs_ci_check_entry_point() {
+        let project = tempfile::tempdir().expect("create temporary project");
+        sync(project.path()).expect("sync shared infrastructure scripts");
+        let script = project.path().join(".infra/bin/ci-check.sh");
+        let content = fs::read_to_string(&script).expect("read CI entry point");
+        assert!(content.contains("rs-infra-ci --project"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_ne!(
+                fs::metadata(script)
+                    .expect("CI entry point metadata")
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0
+            );
+        }
+    }
 
     #[test]
     fn test_remove_legacy_tool_artifacts_preserves_current_tool_binary() {
