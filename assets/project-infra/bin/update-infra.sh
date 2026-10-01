@@ -38,5 +38,10 @@ for line in os.environ["UPDATE_PAIRS"].splitlines():
     path.write_text(text)
 PYTHON_UPDATE
 fi
+for role in ci coverage dependency pages style tools verify; do
+    config="$project_root/.infra/$role/tool.toml"
+    [ -f "$config" ] || continue
+    "$project_root/.infra/bin/infra-tool.sh" "rs-infra-$role" --help >/dev/null
+done
 "$project_root/.infra/bin/infra-tool.sh" rs-infra-tools sync-scripts --project "$project_root"
 echo "infra: update complete; ${#updates[@]} revision(s) updated"
