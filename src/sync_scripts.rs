@@ -150,6 +150,7 @@ fn ensure_executable(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::process::Command;
 
     use super::remove_legacy_tool_artifacts;
     use super::sync;
@@ -175,6 +176,36 @@ mod tests {
                 0
             );
         }
+    }
+
+    /// Runs the installed entry point when the selected CI tasks omit coverage.
+    #[cfg(unix)]
+    #[test]
+    fn test_ci_check_skips_report_when_ci_did_not_collect_coverage() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let project = tempfile::tempdir().expect("create temporary project");
+        sync(project.path()).expect("sync shared infrastructure scripts");
+        let bin = project.path().join(".infra/bin");
+        let prepare = bin.join("prepare-local-path-dependencies.sh");
+        let infra_tool = bin.join("infra-tool.sh");
+        let report = project.path().join(".infra/lib/coverage-report.sh");
+        fs::write(&prepare, "#!/bin/sh\nexit 0\n").expect("prepare mock");
+        fs::write(&infra_tool, "#!/bin/sh\nprintf '%s\\n' \"$*\" > ci-args\n").expect("CI mock");
+        fs::write(&report, "#!/bin/sh\necho called > report-called\n").expect("report mock");
+        for path in [&prepare, &infra_tool, &report] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("mock permissions");
+        }
+
+        let output = Command::new(bin.join("ci-check.sh"))
+            .arg("--ignore-coverage-thresholds")
+            .current_dir(project.path())
+            .output()
+            .expect("run CI entry point");
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(!project.path().join("report-called").exists());
+        let args = fs::read_to_string(project.path().join("ci-args")).expect("CI invocation");
+        assert!(args.contains("--ignore-coverage-thresholds check"));
     }
 
     #[test]
