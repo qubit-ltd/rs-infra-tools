@@ -13,7 +13,7 @@ fi
 "$project_root/.infra/bin/prepare-local-path-dependencies.sh"
 "$project_root/.infra/bin/infra-tool.sh" rs-infra-ci --project "$project_root" "$@" check
 
-coverage_selected=false
+coverage_selected=true
 explicit_only=false
 for ((index = 1; index <= $#; index++)); do
     argument=${!index}
@@ -37,6 +37,6 @@ if [ "$explicit_only" = true ]; then
         fi
     done
 fi
-if [ "$coverage_selected" = true ]; then
+if [ "$coverage_selected" = true ] && [ -f "$project_root/target/infra/coverage/raw.json" ]; then
     "$project_root/.infra/lib/coverage-report.sh"
 fi
