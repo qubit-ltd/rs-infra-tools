@@ -31,12 +31,6 @@
     ".infra/style/rustfmt.toml",
     ".infra/style/tool.toml",
     ".infra/tools/tool.toml",
-    ".infra/verify/tool.toml",
-    "align-ci.sh",
-    "ci-check.sh",
-    "coverage.sh",
-    "dependency-update.sh",
-    "style-check.sh",
-    "update-infra.sh"
+    ".infra/verify/tool.toml"
   ]
 }

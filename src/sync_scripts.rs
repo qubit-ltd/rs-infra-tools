@@ -16,27 +16,6 @@ use anyhow::bail;
 
 const SCRIPTS: &[(&str, &str)] = &[
     (
-        "align-ci.sh",
-        include_str!("../assets/project-infra/root/align-ci.sh"),
-    ),
-    (
-        "ci-check.sh",
-        include_str!("../assets/project-infra/root/ci-check.sh"),
-    ),
-    (
-        "coverage.sh",
-        include_str!("../assets/project-infra/root/coverage.sh"),
-    ),
-    (
-        "dependency-update.sh",
-        include_str!("../assets/project-infra/root/dependency-update.sh"),
-    ),
-    (
-        "style-check.sh",
-        include_str!("../assets/project-infra/root/style-check.sh"),
-    ),
-    ("update-infra.sh", include_str!("../update-infra.sh")),
-    (
         ".infra/bin/align-ci.sh",
         include_str!("../.infra/bin/align-ci.sh"),
     ),
@@ -350,6 +329,19 @@ mod tests {
         let script = project.path().join(".infra/bin/ci-check.sh");
         let content = fs::read_to_string(&script).expect("read CI entry point");
         assert!(content.contains("rs-infra-ci --project"));
+        for name in [
+            "align-ci.sh",
+            "ci-check.sh",
+            "coverage.sh",
+            "dependency-update.sh",
+            "style-check.sh",
+            "update-infra.sh",
+        ] {
+            assert!(
+                !project.path().join(name).exists(),
+                "unexpected root script: {name}"
+            );
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
