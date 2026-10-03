@@ -31,7 +31,7 @@ cargo run --manifest-path /path/to/rs-infra-tools/Cargo.toml -- --help
 rs-infra-tools sync-scripts --project /path/to/project
 ```
 
-该命令会更新 `.infra/bin`、`.infra/lib` 中的受管理脚本，并刷新已启用的 `.infra/*/tool.toml` 标准字段。它会保留项目选定的 revision、额外工具元数据，以及项目专属的 CI、依赖、Pages 和风格配置。
+该命令会更新根目录的 `update-infra.sh` 入口、`.infra/bin` 和 `.infra/lib` 中的受管理脚本，并刷新已启用的 `.infra/*/tool.toml` 标准字段。它会保留项目选定的 revision、额外工具元数据，以及项目专属的 CI、依赖、Pages 和风格配置。
 
 ## 能力与限制
 

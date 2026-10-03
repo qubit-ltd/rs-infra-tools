@@ -31,6 +31,7 @@
     ".infra/style/rustfmt.toml",
     ".infra/style/tool.toml",
     ".infra/tools/tool.toml",
-    ".infra/verify/tool.toml"
+    ".infra/verify/tool.toml",
+    "update-infra.sh"
   ]
 }
