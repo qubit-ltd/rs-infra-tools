@@ -31,7 +31,7 @@ Projects can also synchronize the standard scripts and tool metadata bundled wit
 rs-infra-tools sync-scripts --project /path/to/project
 ```
 
-This refreshes the root CI, style, coverage, dependency, and infra-update entry points; managed scripts under `.infra/bin` and `.infra/lib`; and standard fields in enabled `.infra/*/tool.toml` files. It preserves selected revisions, extra tool metadata, and project-specific CI, dependency, Pages, and style configuration.
+This refreshes managed scripts under `.infra/bin` and `.infra/lib`, plus standard fields in enabled `.infra/*/tool.toml` files. It preserves selected revisions, extra tool metadata, and project-specific CI, dependency, Pages, and style configuration.
 
 ## Capabilities and limitations
 
