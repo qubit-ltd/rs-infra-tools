@@ -7,6 +7,8 @@ cleanup_build_artifacts() {
     local task_status=$?
     local cleanup_status=0
     local path
+    local attempt
+    local max_attempts=5
 
     for path in \
         "$project_root/target/debug" \
@@ -19,10 +21,25 @@ cleanup_build_artifacts() {
         "$project_root/fuzz/target"; do
         if [ -d "$path" ]; then
             echo "Cleaning transient build artifacts: $path"
-            command rm -rf -- "$path" || {
-                echo "error: unable to clean transient build artifacts: $path" >&2
-                cleanup_status=1
-            }
+            for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+                if command rm -rf -- "$path"; then
+                    break
+                fi
+
+                # Another compiler/check process may still be creating files
+                # while rm traverses this shared target directory. Treat a
+                # path removed by a concurrent cleanup as success, otherwise
+                # retry briefly before reporting a persistent failure.
+                if [ ! -e "$path" ] && [ ! -L "$path" ]; then
+                    break
+                fi
+                if [ "$attempt" -lt "$max_attempts" ]; then
+                    sleep 0.1
+                else
+                    echo "error: unable to clean transient build artifacts: $path" >&2
+                    cleanup_status=1
+                fi
+            done
         fi
     done
 
