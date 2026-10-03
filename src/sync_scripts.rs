@@ -15,6 +15,7 @@ use anyhow::Result;
 use anyhow::bail;
 
 const SCRIPTS: &[(&str, &str)] = &[
+    ("update-infra.sh", include_str!("../update-infra.sh")),
     (
         ".infra/bin/align-ci.sh",
         include_str!("../.infra/bin/align-ci.sh"),
@@ -329,13 +330,15 @@ mod tests {
         let script = project.path().join(".infra/bin/ci-check.sh");
         let content = fs::read_to_string(&script).expect("read CI entry point");
         assert!(content.contains("rs-infra-ci --project"));
+        let updater = fs::read_to_string(project.path().join("update-infra.sh"))
+            .expect("read root update entry point");
+        assert!(updater.contains(".infra/bin/update-infra.sh"));
         for name in [
             "align-ci.sh",
             "ci-check.sh",
             "coverage.sh",
             "dependency-update.sh",
             "style-check.sh",
-            "update-infra.sh",
         ] {
             assert!(
                 !project.path().join(name).exists(),
@@ -348,6 +351,14 @@ mod tests {
             assert_ne!(
                 fs::metadata(script)
                     .expect("CI entry point metadata")
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0
+            );
+            assert_ne!(
+                fs::metadata(project.path().join("update-infra.sh"))
+                    .expect("root update entry point metadata")
                     .permissions()
                     .mode()
                     & 0o111,
