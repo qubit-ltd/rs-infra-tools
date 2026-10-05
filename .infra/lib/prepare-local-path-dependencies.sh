@@ -20,7 +20,16 @@ while IFS=$'\t' read -r relative_path repository_url branch; do
     target="$project_root/$relative_path"
     [ -e "$target/.git" ] && continue
     mkdir -p "$(dirname "$target")"
-    infra_run_with_retry "clone $repository_url" \
-        git -c http.connectTimeout="${RS_INFRA_GIT_CONNECT_TIMEOUT_SECONDS:-30}" \
-        clone --depth 1 --branch "$branch" "$repository_url" "$target"
+    if [[ "$branch" =~ ^[[:xdigit:]]{40}$ ]]; then
+        git init "$target"
+        git -C "$target" remote add origin "$repository_url"
+        infra_run_with_retry "fetch $repository_url revision $branch" \
+            git -c http.connectTimeout="${RS_INFRA_GIT_CONNECT_TIMEOUT_SECONDS:-30}" \
+            -C "$target" fetch --depth 1 origin "$branch"
+        git -C "$target" checkout --detach FETCH_HEAD
+    else
+        infra_run_with_retry "clone $repository_url" \
+            git -c http.connectTimeout="${RS_INFRA_GIT_CONNECT_TIMEOUT_SECONDS:-30}" \
+            clone --depth 1 --branch "$branch" "$repository_url" "$target"
+    fi
 done < "$config"

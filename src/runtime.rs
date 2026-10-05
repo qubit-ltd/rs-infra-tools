@@ -317,7 +317,7 @@ fn ensure_built(
     source_dir: &Path,
     tool_cache: &Path,
 ) -> Result<PathBuf> {
-    let executable = tool_cache.join("bin").join(tool.name);
+    let executable = tool_cache.join("bin").join(executable_file_name(tool.name));
     if executable.is_file() {
         return Ok(executable);
     }
@@ -366,7 +366,9 @@ fn ensure_built(
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let built = target_dir.join("release").join(tool.name);
+    let built = target_dir
+        .join("release")
+        .join(executable_file_name(tool.name));
     if !built.is_file() {
         bail!("cargo build succeeded but {} is missing", built.display());
     }
@@ -491,7 +493,7 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
         && fs::read_to_string(&manifest_path).is_ok_and(|cached| cached == manifest)
         && tools
             .iter()
-            .all(|tool| bin_dir.join(tool.tool.name).is_file())
+            .all(|tool| bin_dir.join(executable_file_name(tool.tool.name)).is_file())
     {
         return Ok(bin_dir);
     }
@@ -508,7 +510,9 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     }
     fs::create_dir_all(temporary.join("bin"))?;
     for tool in tools {
-        let destination = temporary.join("bin").join(tool.tool.name);
+        let destination = temporary
+            .join("bin")
+            .join(executable_file_name(tool.tool.name));
         if fs::hard_link(&tool.executable, &destination).is_err() {
             fs::copy(&tool.executable, &destination)?;
         }
@@ -516,6 +520,10 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     fs::write(temporary.join("manifest.txt"), manifest.as_bytes())?;
     fs::rename(&temporary, &invocation_dir)?;
     Ok(bin_dir)
+}
+
+fn executable_file_name(name: &str) -> String {
+    format!("{name}{}", env::consts::EXE_SUFFIX)
 }
 
 fn cache_root() -> Result<PathBuf> {
@@ -592,13 +600,17 @@ impl Drop for CacheLock {
 mod tests {
     use super::ResolvedTool;
     use super::Tool;
+    use super::executable_file_name;
     use super::invocation_bin_dir;
     use super::merge_rustfmt_config;
 
     #[test]
     fn invocation_bin_dir_contains_tools_and_repairs_incomplete_cache() {
         let directory = tempfile::tempdir().unwrap();
-        let executable = directory.path().join("source/rs-infra-verify");
+        let executable = directory
+            .path()
+            .join("source")
+            .join(executable_file_name("rs-infra-verify"));
         std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
         std::fs::write(&executable, b"tool binary").unwrap();
         let tools = [ResolvedTool {
@@ -609,13 +621,13 @@ mod tests {
         }];
 
         let bin_dir = invocation_bin_dir(directory.path(), &tools).unwrap();
-        let installed = bin_dir.join("rs-infra-verify");
+        let installed = bin_dir.join(executable_file_name("rs-infra-verify"));
         assert_eq!(std::fs::read(&installed).unwrap(), b"tool binary");
 
         std::fs::remove_file(&installed).unwrap();
         let repaired = invocation_bin_dir(directory.path(), &tools).unwrap();
         assert_eq!(
-            std::fs::read(repaired.join("rs-infra-verify")).unwrap(),
+            std::fs::read(repaired.join(executable_file_name("rs-infra-verify"))).unwrap(),
             b"tool binary"
         );
     }
