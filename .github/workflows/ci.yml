@@ -23,5 +23,9 @@ jobs:
           toolchain: 1.94.0
       - name: Install pinned nightly components
         run: rustup toolchain install nightly-2026-06-05 --profile minimal --component rustfmt --component clippy
+      - name: Build the infrastructure runtime
+        run: |
+          cargo build --release --locked --bin rs-infra-tools --target-dir "$RUNNER_TEMP/rs-infra-tools-target"
+          echo "RS_INFRA_TOOLS_BIN=$RUNNER_TEMP/rs-infra-tools-target/release/rs-infra-tools" >> "$GITHUB_ENV"
       - run: ./.infra/bin/align-ci.sh
       - run: ./.infra/bin/ci-check.sh

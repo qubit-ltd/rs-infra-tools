@@ -15,5 +15,6 @@ esac
 if [ -n "${RS_INFRA_BIN_DIR:-}" ] && [ -x "$RS_INFRA_BIN_DIR/$tool" ]; then
     exec "$RS_INFRA_BIN_DIR/$tool" "$@"
 fi
-[ -x "${RS_INFRA_TOOLS_BIN:-}" ] || { echo "error: rs-infra-tools runtime is unavailable" >&2; exit 1; }
-exec "$RS_INFRA_TOOLS_BIN" latest --project "$project_root" --tool "$tool" -- "$@"
+tool_runner=${RS_INFRA_TOOLS_BIN:-$project_root/.infra/tools/bin/rs-infra-tools}
+[ -x "$tool_runner" ] || { echo "error: rs-infra-tools runtime is unavailable" >&2; exit 1; }
+exec "$tool_runner" latest --project "$project_root" --tool "$tool" -- "$@"
