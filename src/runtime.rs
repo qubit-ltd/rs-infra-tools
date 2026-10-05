@@ -486,7 +486,11 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     let lock_path = cache.join("locks").join(format!("invocation-{key}.lock"));
     let _lock = CacheLock::acquire(&lock_path)?;
     let manifest_path = invocation_dir.join("manifest.txt");
-    if bin_dir.is_dir() && fs::read_to_string(&manifest_path).is_ok_and(|cached| cached == manifest)
+    if bin_dir.is_dir()
+        && fs::read_to_string(&manifest_path).is_ok_and(|cached| cached == manifest)
+        && tools
+            .iter()
+            .all(|tool| bin_dir.join(tool.tool.name).is_file())
     {
         return Ok(bin_dir);
     }
@@ -501,9 +505,9 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     if temporary.exists() {
         fs::remove_dir_all(&temporary)?;
     }
-    fs::create_dir_all(&temporary)?;
+    fs::create_dir_all(temporary.join("bin"))?;
     for tool in tools {
-        let destination = temporary.join(tool.tool.name);
+        let destination = temporary.join("bin").join(tool.tool.name);
         if fs::hard_link(&tool.executable, &destination).is_err() {
             fs::copy(&tool.executable, &destination)?;
         }
@@ -579,7 +583,35 @@ impl CacheLock {
 
 #[cfg(test)]
 mod tests {
+    use super::ResolvedTool;
+    use super::Tool;
+    use super::invocation_bin_dir;
     use super::merge_rustfmt_config;
+
+    #[test]
+    fn invocation_bin_dir_contains_tools_and_repairs_incomplete_cache() {
+        let directory = tempfile::tempdir().unwrap();
+        let executable = directory.path().join("source/rs-infra-verify");
+        std::fs::create_dir_all(executable.parent().unwrap()).unwrap();
+        std::fs::write(&executable, b"tool binary").unwrap();
+        let tools = [ResolvedTool {
+            tool: Tool::new("rs-infra-verify", "rs-infra-verify", "qubit-infra-verify"),
+            revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            source_dir: directory.path().join("source"),
+            executable,
+        }];
+
+        let bin_dir = invocation_bin_dir(directory.path(), &tools).unwrap();
+        let installed = bin_dir.join("rs-infra-verify");
+        assert_eq!(std::fs::read(&installed).unwrap(), b"tool binary");
+
+        std::fs::remove_file(&installed).unwrap();
+        let repaired = invocation_bin_dir(directory.path(), &tools).unwrap();
+        assert_eq!(
+            std::fs::read(repaired.join("rs-infra-verify")).unwrap(),
+            b"tool binary"
+        );
+    }
 
     #[test]
     fn project_rustfmt_values_override_upstream_defaults() {
