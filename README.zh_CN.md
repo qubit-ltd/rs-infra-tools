@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![English Document](https://img.shields.io/badge/Document-English-blue.svg)](README.md)
 
-为 Rust 项目提供不依赖 submodule 的基础设施工具安装、缓存与执行能力。
+为 Qubit Rust 项目动态解析、编译、缓存并运行基础设施工具，无需 submodule，也无需在每个项目中单独安装工具。
 
 ## 安装
 
@@ -17,25 +17,27 @@ cargo install --git https://github.com/qubit-ltd/rs-infra-tools.git --tag v0.1.0
 
 ## 快速开始
 
-在 Rust 项目根目录查看命令帮助：
+在已迁移的项目根目录运行固定入口：
 
 ```bash
-cargo run --manifest-path /path/to/rs-infra-tools/Cargo.toml -- --help
+./update-infra.sh
 ```
 
-项目的 `.infra` 配置仍然是行为的唯一来源；工具仓库不会复制项目配置。具体策略由项目配置决定。
+入口会先检查 `rs-infra-tools/main` 的最新提交；本地缓存没有对应版本时，再下载并编译。随后它直接运行共享缓存中的上游脚本。`update-infra.sh` 会预热所有最新工具；其他项目命令按需解析和运行工具。项目专属的 CI、依赖、Pages 和风格配置仍保存在项目自己的 `.infra` 目录中。
 
-项目也可以从当前 pin 的 `rs-infra-tools` revision 同步标准脚本和工具元数据：
+默认共享缓存位于 `${XDG_CACHE_HOME:-~/.cache}/qubit/rs-infra`。设置 `RS_INFRA_CACHE_DIR` 可以更换缓存根目录。源码和编译结果按 Git 提交、主机目标及 Rust 编译器版本区分。网络操作默认最多重试 4 次，等待时间按 2、4、8 秒递增；可以用 `RS_INFRA_NETWORK_MAX_ATTEMPTS` 和 `RS_INFRA_NETWORK_RETRY_DELAY_SECONDS` 调整策略。
+
+也可以直接调用命令行入口：
 
 ```bash
-rs-infra-tools sync-scripts --project /path/to/project
+rs-infra-tools latest --project . --tool rs-infra-style -- check
+rs-infra-tools prewarm --project .
 ```
 
-该命令会更新根目录的 `update-infra.sh` 入口、`.infra/bin` 和 `.infra/lib` 中的受管理脚本，并刷新已启用的 `.infra/*/tool.toml` 标准字段。它会保留项目选定的 revision、额外工具元数据，以及项目专属的 CI、依赖、Pages 和风格配置。
 
 ## 能力与限制
 
-工具提供受 pin 约束的二进制安装与执行，并能按 revision 同步 `.infra` 公共 Shell 脚本。项目专属策略仍由使用方的 `.infra` 配置维护。
+运行前会解析 `main` 的确切提交；同一全局缓存中的每个工具版本只编译一次，项目直接复用缓存的二进制和上游脚本，不会因更新工具而生成项目文件改动。缓存只在本机共享；独立 CI runner 若要跨任务复用编译结果，需要自行持久化该缓存目录。
 
 ## 延伸阅读
 

@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![中文文档](https://img.shields.io/badge/文档-中文版-blue.svg)](README.zh_CN.md)
 
-Install and execute revision- and digest-pinned infrastructure binaries without submodules.
+Resolve, build, cache, and execute the latest `main` revisions of Qubit Rust infrastructure tools without submodules or per-project tool installations.
 
 ## Installation
 
@@ -23,19 +23,26 @@ From a Rust project root:
 cargo run --manifest-path /path/to/rs-infra-tools/Cargo.toml -- --help
 ```
 
-The project's `.infra` configuration remains the source of truth; this tool does not copy project configuration into the tool repository.
-
-Projects can also synchronize the standard scripts and tool metadata bundled with the pinned `rs-infra-tools` revision:
+Run the fixed bootstrap entry point from any migrated project:
 
 ```bash
-rs-infra-tools sync-scripts --project /path/to/project
+./update-infra.sh
 ```
 
-This refreshes the root `update-infra.sh` entry point, managed scripts under `.infra/bin` and `.infra/lib`, plus standard fields in enabled `.infra/*/tool.toml` files. It preserves selected revisions, extra tool metadata, and project-specific CI, dependency, Pages, and style configuration.
+The bootstrap checks `rs-infra-tools/main`, downloads and builds that revision when needed, then runs the upstream script directly from the shared cache. `update-infra.sh` prewarms the latest tool binaries; regular project commands resolve the required tools on demand. Project-specific CI, dependency, Pages, and style settings remain under the project's `.infra` directory.
+
+The default shared cache is `${XDG_CACHE_HOME:-~/.cache}/qubit/rs-infra`. Set `RS_INFRA_CACHE_DIR` to choose another cache root. Cached sources and binaries are keyed by Git revision, host target, and Rust compiler version. Network operations retry four times by default with exponential delays; `RS_INFRA_NETWORK_MAX_ATTEMPTS` and `RS_INFRA_NETWORK_RETRY_DELAY_SECONDS` change the retry policy.
+
+The command-line entry points are also available directly:
+
+```bash
+rs-infra-tools latest --project . --tool rs-infra-style -- check
+rs-infra-tools prewarm --project .
+```
 
 ## Capabilities and limitations
 
-The tool provides locked binary installation and execution, plus revision-pinned synchronization of shared `.infra` shell scripts. Project-specific policy remains in the consuming project's `.infra` configuration.
+The tool resolves exact `main` commits before using cached tools, compiles each revision once per shared cache, and runs cached upstream scripts without writing generated files into consuming projects. Local caches are host-local; independent CI runners need their own cache persistence to share build results across jobs.
 
 ## Learn More
 
