@@ -143,30 +143,29 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
             &dependency_source.source_dir,
         );
     }
-    if env::var_os("RS_INFRA_STYLE_RUSTFMT_CONFIG").is_none() {
-        if let Some(style_source) = resolved
+    if env::var_os("RS_INFRA_STYLE_RUSTFMT_CONFIG").is_none()
+        && let Some(style_source) = resolved
             .iter()
             .find(|item| item.tool.name == "rs-infra-style")
-        {
-            let upstream = style_source.source_dir.join(".infra/style/rustfmt.toml");
-            if upstream.is_file() {
-                let override_path = env::var_os("RS_INFRA_STYLE_RUSTFMT_CONFIG_OVERRIDE")
-                    .map(PathBuf::from)
-                    .filter(|path| path.is_file())
-                    .or_else(|| {
-                        let path = project.join(".infra/style/rustfmt.toml");
-                        path.is_file().then_some(path)
-                    })
-                    .or_else(|| {
-                        let path = project.join("rustfmt.toml");
-                        path.is_file().then_some(path)
-                    });
-                let config = match override_path {
-                    Some(override_path) => merge_rustfmt_config(&cache, &upstream, &override_path)?,
-                    None => upstream,
-                };
-                command.env("RS_INFRA_STYLE_RUSTFMT_CONFIG", config);
-            }
+    {
+        let upstream = style_source.source_dir.join(".infra/style/rustfmt.toml");
+        if upstream.is_file() {
+            let override_path = env::var_os("RS_INFRA_STYLE_RUSTFMT_CONFIG_OVERRIDE")
+                .map(PathBuf::from)
+                .filter(|path| path.is_file())
+                .or_else(|| {
+                    let path = project.join(".infra/style/rustfmt.toml");
+                    path.is_file().then_some(path)
+                })
+                .or_else(|| {
+                    let path = project.join("rustfmt.toml");
+                    path.is_file().then_some(path)
+                });
+            let config = match override_path {
+                Some(override_path) => merge_rustfmt_config(&cache, &upstream, &override_path)?,
+                None => upstream,
+            };
+            command.env("RS_INFRA_STYLE_RUSTFMT_CONFIG", config);
         }
     }
 
@@ -583,6 +582,12 @@ impl CacheLock {
     }
 }
 
+impl Drop for CacheLock {
+    fn drop(&mut self) {
+        let _ = self.file.unlock();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::ResolvedTool;
@@ -629,11 +634,5 @@ mod tests {
         assert!(text.contains("edition = \"2024\""));
         assert!(text.contains("max_width = 80"));
         assert!(!text.contains("max_width = 120"));
-    }
-}
-
-impl Drop for CacheLock {
-    fn drop(&mut self) {
-        let _ = self.file.unlock();
     }
 }
