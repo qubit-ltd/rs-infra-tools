@@ -2,11 +2,12 @@
 set -euo pipefail
 
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
-project_root=$(cd "$script_dir/../.." && pwd -P)
-source "$project_root/.infra/lib/cleanup-build-artifacts.sh"
-"$script_dir/prepare-local-path-dependencies.sh"
+project_root=${RS_INFRA_PROJECT_ROOT:-$(cd "$script_dir/../.." && pwd -P)}
+shared_root=${RS_INFRA_SHARED_ROOT:-$(cd "$script_dir/../.." && pwd -P)}
+source "$shared_root/.infra/lib/cleanup-build-artifacts.sh"
+"$shared_root/.infra/bin/prepare-local-path-dependencies.sh"
 policy_config="$project_root/.infra/dependency/policy.toml"
-tool_runner="$project_root/.infra/bin/infra-tool.sh"
+tool_runner="$shared_root/.infra/bin/infra-tool.sh"
 mode="update"
 
 usage() {

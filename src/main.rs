@@ -14,8 +14,7 @@ use clap::Parser;
 use clap::Subcommand;
 use qubit_infra_tools::cache;
 use qubit_infra_tools::ensure;
-
-mod sync_scripts;
+use qubit_infra_tools::runtime;
 
 /// Command-line options for `rs-infra-tools`.
 #[derive(Debug, Parser)]
@@ -50,10 +49,22 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Installs the project-managed rs-infra shell scripts.
-    SyncScripts {
-        /// Project root containing the `.infra` directory.
+    /// Runs the current main revision of an infrastructure tool.
+    Latest {
+        /// Project root passed to the tool.
+        #[arg(long, default_value = ".")]
+        project: PathBuf,
+        /// Infrastructure executable name, for example `rs-infra-style`.
         #[arg(long)]
+        tool: String,
+        /// Arguments passed to the executable unchanged.
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+    /// Resolves and caches every supported infrastructure tool.
+    Prewarm {
+        /// Project root whose configuration will be used later.
+        #[arg(long, default_value = ".")]
         project: PathBuf,
     },
 }
@@ -94,9 +105,14 @@ fn execute(command: Command) -> Result<i32> {
             }
             Ok(code)
         }
-        Command::SyncScripts { project } => {
-            sync_scripts::sync(&project)?;
-            eprintln!("✅ rs-infra-tools: project scripts synchronized");
+        Command::Latest {
+            project,
+            tool,
+            args,
+        } => runtime::run_latest(&project, &tool, &args),
+        Command::Prewarm { project } => {
+            runtime::prewarm(&project)?;
+            eprintln!("✅ rs-infra-tools: latest tool cache prepared");
             Ok(0)
         }
     }

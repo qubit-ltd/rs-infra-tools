@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-project_root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)
-source "$project_root/.infra/lib/cleanup-build-artifacts.sh"
-source "$project_root/.infra/lib/network-retry.sh"
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+project_root=${RS_INFRA_PROJECT_ROOT:-$(cd "$script_dir/../.." && pwd -P)}
+shared_root=${RS_INFRA_SHARED_ROOT:-$(cd "$script_dir/../.." && pwd -P)}
+source "$shared_root/.infra/lib/cleanup-build-artifacts.sh"
+source "$shared_root/.infra/lib/network-retry.sh"
 config="$project_root/.infra/ci/local-path-dependencies.tsv"
 [ -f "$config" ] || exit 0
 while IFS=$'\t' read -r relative_path repository_url branch; do

@@ -11,7 +11,6 @@
     ".infra/bin/prepare-local-path-dependencies.sh",
     ".infra/bin/project-ci-check.sh",
     ".infra/bin/style-check.sh",
-    ".infra/bin/update-infra.sh",
     ".infra/ci/cargo-matrix.json",
     ".infra/ci/ci.toml",
     ".infra/ci/tool.toml",
@@ -31,7 +30,6 @@
     ".infra/style/rustfmt.toml",
     ".infra/style/tool.toml",
     ".infra/tools/tool.toml",
-    ".infra/verify/tool.toml",
-    "update-infra.sh"
+    ".infra/verify/tool.toml"
   ]
 }
