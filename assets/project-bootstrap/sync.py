@@ -16,6 +16,7 @@ import tempfile
 
 
 SNAPSHOT = Path(".infra/bootstrap-source.json")
+TEMP_MARKER = ".rs-infra-bootstrap-temp"
 
 
 def digest(data: bytes) -> str:
@@ -136,6 +137,22 @@ def revision(package: Path) -> str:
         return "unknown"
 
 
+def cleanup_downloaded_package() -> None:
+    value = os.environ.pop("RS_INFRA_BOOTSTRAP_TEMP_ROOT", None)
+    if not value:
+        return
+    root = Path(value)
+    marker = root / TEMP_MARKER
+    try:
+        if root.is_symlink() or not root.is_dir() or not root.name.startswith("rs-infra-bootstrap."):
+            return
+        if marker.read_text(encoding="utf-8") != "rs-infra-bootstrap-temp-v1\n":
+            return
+        shutil.rmtree(root)
+    except OSError as error:
+        print(f"warning: unable to clean bootstrap download {root}: {error}", file=sys.stderr)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
@@ -148,66 +165,69 @@ def main() -> int:
     project = args.project_root.resolve()
     package = args.package_root.resolve()
     try:
-        manifest = load_manifest(package)
-        entries = selected_entries(manifest, project)
-        package_digest = package_state(package, manifest)
-        package_files = {entry["target"]: {"sha256": digest(safe_path(package, entry["source"]).read_bytes()), "executable": entry["executable"]} for entry in entries}
-        old_snapshot, drift = project_state(project)
-        if args.status:
-            current = old_snapshot.get("package_sha256")
-            if current == package_digest:
-                print("bootstrap snapshot matches upstream package")
-                return 0
-            print(f"bootstrap package differs: installed={current or 'missing'} upstream={package_digest}")
-            if drift:
-                print("locally modified or missing: " + ", ".join(drift))
-            return 1
-
-        targets = [entry["target"] for entry in entries] + [SNAPSHOT.as_posix()]
-        print(f"rs-infra-tools {revision(package)} will overwrite {len(targets)} paths:")
-        for target in targets:
-            print(f"  {target}")
-        if args.dry_run:
-            return 0
-        if not args.yes:
-            if not sys.stdin.isatty():
-                print("error: confirmation requires an interactive terminal; pass --yes to overwrite", file=sys.stderr)
-                return 2
-            answer = input("Overwrite these paths with the upstream versions? [y/N] ").strip().lower()
-            if answer not in {"y", "yes"}:
-                print("cancelled")
+        try:
+            manifest = load_manifest(package)
+            entries = selected_entries(manifest, project)
+            package_digest = package_state(package, manifest)
+            package_files = {entry["target"]: {"sha256": digest(safe_path(package, entry["source"]).read_bytes()), "executable": entry["executable"]} for entry in entries}
+            old_snapshot, drift = project_state(project)
+            if args.status:
+                current = old_snapshot.get("package_sha256")
+                if current == package_digest:
+                    print("bootstrap snapshot matches upstream package")
+                    return 0
+                print(f"bootstrap package differs: installed={current or 'missing'} upstream={package_digest}")
+                if drift:
+                    print("locally modified or missing: " + ", ".join(drift))
                 return 1
 
-        planned: list[tuple[dict, Path, bytes]] = []
-        for entry in entries:
-            source = safe_path(package, entry["source"])
-            target = safe_path(project, entry["target"])
-            if target.exists() and not target.is_file():
-                raise ValueError(f"target is not a regular file: {entry['target']}")
-            planned.append((entry, target, source.read_bytes()))
-        for entry, target, data in planned:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            fd, temp_name = tempfile.mkstemp(prefix=".infra-update-", dir=target.parent)
-            try:
-                with os.fdopen(fd, "wb") as stream:
-                    stream.write(data)
-                target_mode = 0o755 if entry["executable"] else 0o644
-                os.chmod(temp_name, target_mode)
-                os.replace(temp_name, target)
-            finally:
-                if os.path.exists(temp_name):
-                    os.unlink(temp_name)
-        source_revision = revision(package)
-        snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "files": package_files}
-        snap_path = safe_path(project, SNAPSHOT.as_posix())
-        snap_path.parent.mkdir(parents=True, exist_ok=True)
-        snap_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        os.chmod(snap_path, 0o644)
-        print("bootstrap files updated")
-        return 0
-    except (OSError, ValueError, json.JSONDecodeError) as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 2
+            targets = [entry["target"] for entry in entries] + [SNAPSHOT.as_posix()]
+            print(f"rs-infra-tools {revision(package)} will overwrite {len(targets)} paths:")
+            for target in targets:
+                print(f"  {target}")
+            if args.dry_run:
+                return 0
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    print("error: confirmation requires an interactive terminal; pass --yes to overwrite", file=sys.stderr)
+                    return 2
+                answer = input("Overwrite these paths with the upstream versions? [y/N] ").strip().lower()
+                if answer not in {"y", "yes"}:
+                    print("cancelled")
+                    return 1
+
+            planned: list[tuple[dict, Path, bytes]] = []
+            for entry in entries:
+                source = safe_path(package, entry["source"])
+                target = safe_path(project, entry["target"])
+                if target.exists() and not target.is_file():
+                    raise ValueError(f"target is not a regular file: {entry['target']}")
+                planned.append((entry, target, source.read_bytes()))
+            for entry, target, data in planned:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                fd, temp_name = tempfile.mkstemp(prefix=".infra-update-", dir=target.parent)
+                try:
+                    with os.fdopen(fd, "wb") as stream:
+                        stream.write(data)
+                    target_mode = 0o755 if entry["executable"] else 0o644
+                    os.chmod(temp_name, target_mode)
+                    os.replace(temp_name, target)
+                finally:
+                    if os.path.exists(temp_name):
+                        os.unlink(temp_name)
+            source_revision = revision(package)
+            snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "files": package_files}
+            snap_path = safe_path(project, SNAPSHOT.as_posix())
+            snap_path.parent.mkdir(parents=True, exist_ok=True)
+            snap_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            os.chmod(snap_path, 0o644)
+            print("bootstrap files updated")
+            return 0
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
+    finally:
+        cleanup_downloaded_package()
 
 
 if __name__ == "__main__":

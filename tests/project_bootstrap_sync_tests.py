@@ -100,6 +100,17 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertTrue(sync.executable_mode_matches(False, True, windows=True))
         self.assertFalse(sync.executable_mode_matches(False, True, windows=False))
 
+    def test_downloaded_source_cleanup_requires_its_marker(self) -> None:
+        temp_root = Path(self.temp.name) / "rs-infra-bootstrap.fixture"
+        temp_root.mkdir()
+        marker = temp_root / sync.TEMP_MARKER
+        marker.write_text("rs-infra-bootstrap-temp-v1\n")
+        (temp_root / "source").mkdir()
+        sync.os.environ["RS_INFRA_BOOTSTRAP_TEMP_ROOT"] = str(temp_root)
+        sync.cleanup_downloaded_package()
+        self.assertFalse(temp_root.exists())
+        self.assertNotIn("RS_INFRA_BOOTSTRAP_TEMP_ROOT", sync.os.environ)
+
     def test_repeated_sync_is_idempotent(self) -> None:
         first = self.run_sync("--yes")
         snapshot = (self.project / ".infra/bootstrap-source.json").read_bytes()
