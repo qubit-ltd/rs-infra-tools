@@ -10,17 +10,28 @@ if [[ ! -d "$project_root/.infra" ]]; then
     echo "error: unable to locate project .infra directory" >&2
     exit 2
 fi
+python_cmd=${RS_INFRA_PYTHON:-}
+if [[ -z "$python_cmd" ]]; then
+    if command -v python3 >/dev/null 2>&1; then
+        python_cmd=python3
+    elif command -v python >/dev/null 2>&1; then
+        python_cmd=python
+    else
+        echo "error: Python 3 is required to manage bootstrap snapshots" >&2
+        exit 2
+    fi
+fi
 
 mode=${1:-}
 if [[ "$mode" == --check ]]; then
-    exec python3 "$project_root/.infra/bootstrap-check.py"
+    exec "$python_cmd" "$project_root/.infra/bootstrap-check.py"
 fi
 if [[ "$mode" != "" && "$mode" != --yes && "$mode" != --dry-run && "$mode" != --status ]]; then
     echo "usage: ./update-infra.sh [--yes|--dry-run|--status|--check]" >&2
     exit 2
 fi
 
-tmp_root=${RUNNER_TEMP:-${TMPDIR:-/tmp}}
+tmp_root=${TMPDIR:-/tmp}
 work=$(mktemp -d "$tmp_root/rs-infra-bootstrap.XXXXXX")
 cleanup() { rm -rf -- "$work"; }
 trap cleanup EXIT
@@ -31,7 +42,7 @@ if ! git clone --quiet --depth 1 --single-branch --branch main "$repository" "$w
 fi
 export RS_INFRA_SOURCE_REVISION
 RS_INFRA_SOURCE_REVISION=$(git -C "$work/source" rev-parse HEAD)
-python3 "$work/source/assets/project-bootstrap/sync.py" \
+"$python_cmd" "$work/source/assets/project-bootstrap/sync.py" \
     --project-root "$project_root" \
     --package-root "$work/source/assets/project-bootstrap" \
     "$@"
