@@ -77,6 +77,25 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sync.load_manifest(self.package)
 
+    def test_selected_profile_is_loaded_from_project_config(self) -> None:
+        manifest = json.loads((self.package / "manifest.json").read_text())
+        (self.package / "source/config.toml").write_text("managed = true\n")
+        manifest["profiles"] = {"shared-default": [
+            {"source": "source/config.toml", "target": ".infra/config.toml", "executable": False}
+        ]}
+        (self.package / "manifest.json").write_text(json.dumps(manifest))
+        (self.project / ".infra").mkdir()
+        (self.project / ".infra/bootstrap-update.toml").write_text('profiles = ["shared-default"]\n')
+        selected = sync.selected_entries(sync.load_manifest(self.package), self.project)
+        self.assertEqual([entry["target"] for entry in selected], [".infra/tool.sh", ".infra/config.toml"])
+
+    def test_symlink_escape_is_rejected(self) -> None:
+        outside = Path(self.temp.name) / "outside"
+        outside.mkdir()
+        (self.project / ".infra").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            sync.safe_path(self.project, ".infra/tool.sh")
+
     def test_repeated_sync_is_idempotent(self) -> None:
         first = self.run_sync("--yes")
         snapshot = (self.project / ".infra/bootstrap-source.json").read_bytes()

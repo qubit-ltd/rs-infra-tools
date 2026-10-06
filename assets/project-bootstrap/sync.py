@@ -13,7 +13,6 @@ import stat
 import subprocess
 import sys
 import tempfile
-import tomllib
 
 
 SNAPSHOT = Path(".infra/bootstrap-source.json")
@@ -69,8 +68,15 @@ def selected_entries(manifest: dict, project: Path) -> list[dict]:
         return entries
     if config.is_symlink() or not config.is_file():
         raise ValueError(".infra/bootstrap-update.toml must be a regular file")
-    settings = tomllib.loads(config.read_text(encoding="utf-8"))
-    profiles = settings.get("profiles", [])
+    profiles = []
+    for line in config.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        key, separator, value = line.partition("=")
+        if not separator or key.strip() != "profiles":
+            raise ValueError("bootstrap-update.toml only supports the profiles array")
+        profiles = json.loads(value.strip())
     if not isinstance(profiles, list) or any(not isinstance(name, str) for name in profiles):
         raise ValueError("profiles must be an array of strings in bootstrap-update.toml")
     known = manifest.get("profiles", {})
