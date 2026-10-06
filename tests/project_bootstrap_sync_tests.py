@@ -119,6 +119,28 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertEqual(second.returncode, 0, second.stderr)
         self.assertEqual((self.project / ".infra/bootstrap-source.json").read_bytes(), snapshot)
 
+    def test_snapshot_check_accepts_git_for_windows_crlf_checkout(self) -> None:
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        target = self.project / ".infra/tool.sh"
+        target.write_bytes(target.read_bytes().replace(b"\n", b"\r\n"))
+        checker = self.project / ".infra/bootstrap-check.py"
+        checker.write_bytes((PACKAGE / "files/.infra/bootstrap-check.py").read_bytes())
+        checked = subprocess.run(
+            [sys.executable, str(checker)], text=True, capture_output=True
+        )
+        self.assertEqual(checked.returncode, 0, checked.stdout + checked.stderr)
+        self.assertIn("match", checked.stdout)
+
+    def test_package_digest_is_stable_across_crlf_checkout(self) -> None:
+        manifest_path = self.package / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        package_sha = sync.package_state(self.package, manifest)
+        manifest_path.write_bytes(manifest_path.read_bytes().replace(b"\n", b"\r\n"))
+        source_path = self.package / "source/tool.sh"
+        source_path.write_bytes(source_path.read_bytes().replace(b"\n", b"\r\n"))
+        self.assertEqual(sync.package_state(self.package, manifest), package_sha)
+
 
 if __name__ == "__main__":
     unittest.main()

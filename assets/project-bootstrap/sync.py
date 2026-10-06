@@ -20,7 +20,9 @@ TEMP_MARKER = ".rs-infra-bootstrap-temp"
 
 
 def digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
+    # Git for Windows may materialize managed text files with CRLF endings.
+    # Hash their canonical LF form so snapshots stay portable across checkouts.
+    return hashlib.sha256(data.replace(b"\r\n", b"\n")).hexdigest()
 
 
 def executable_mode_matches(actual: bool, expected: bool, *, windows: bool | None = None) -> bool:
@@ -97,7 +99,7 @@ def selected_entries(manifest: dict, project: Path) -> list[dict]:
 def package_state(package: Path, manifest: dict) -> str:
     hasher = hashlib.sha256()
     manifest_bytes = (package / "manifest.json").read_bytes()
-    hasher.update(b"manifest.json\0" + manifest_bytes)
+    hasher.update(b"manifest.json\0" + manifest_bytes.replace(b"\r\n", b"\n"))
     entries = list(manifest["files"])
     for profile_entries in manifest.get("profiles", {}).values():
         entries.extend(profile_entries)
@@ -105,7 +107,8 @@ def package_state(package: Path, manifest: dict) -> str:
         source = safe_path(package, entry["source"])
         data = source.read_bytes()
         executable = entry["executable"]
-        hasher.update(entry["target"].encode() + b"\0" + data + (b"\1" if executable else b"\0"))
+        canonical_data = data.replace(b"\r\n", b"\n")
+        hasher.update(entry["target"].encode() + b"\0" + canonical_data + (b"\1" if executable else b"\0"))
     return hasher.hexdigest()
 
 
