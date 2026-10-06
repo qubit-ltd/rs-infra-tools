@@ -22,6 +22,12 @@ def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def executable_mode_matches(actual: bool, expected: bool, *, windows: bool | None = None) -> bool:
+    if windows is None:
+        windows = os.name == "nt"
+    return windows or actual == expected
+
+
 def safe_path(root: Path, value: str) -> Path:
     rel = PurePosixPath(value)
     if rel.is_absolute() or not rel.parts or ".." in rel.parts or "\\" in value:
@@ -115,7 +121,7 @@ def project_state(project: Path) -> tuple[dict, list[str]]:
             drift.append(target)
             continue
         mode = bool(path.stat().st_mode & stat.S_IXUSR)
-        if digest(path.read_bytes()) != expected.get("sha256") or mode != expected.get("executable"):
+        if digest(path.read_bytes()) != expected.get("sha256") or not executable_mode_matches(mode, expected.get("executable")):
             drift.append(target)
     return snapshot, drift
 

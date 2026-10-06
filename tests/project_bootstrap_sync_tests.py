@@ -96,6 +96,10 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sync.safe_path(self.project, ".infra/tool.sh")
 
+    def test_windows_mode_check_ignores_unrepresentable_execute_bit(self) -> None:
+        self.assertTrue(sync.executable_mode_matches(False, True, windows=True))
+        self.assertFalse(sync.executable_mode_matches(False, True, windows=False))
+
     def test_repeated_sync_is_idempotent(self) -> None:
         first = self.run_sync("--yes")
         snapshot = (self.project / ".infra/bootstrap-source.json").read_bytes()
