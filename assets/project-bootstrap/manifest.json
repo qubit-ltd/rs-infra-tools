@@ -1,0 +1,104 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "source": "files/.infra/bootstrap.sh",
+      "target": ".infra/bootstrap.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bootstrap-check.py",
+      "target": ".infra/bootstrap-check.py",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/align-ci.sh",
+      "target": ".infra/bin/align-ci.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/ci-check.sh",
+      "target": ".infra/bin/ci-check.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/coverage.sh",
+      "target": ".infra/bin/coverage.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/dependency-update.sh",
+      "target": ".infra/bin/dependency-update.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/infra-tool.sh",
+      "target": ".infra/bin/infra-tool.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/prepare-local-path-dependencies.sh",
+      "target": ".infra/bin/prepare-local-path-dependencies.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/project-ci-check.sh",
+      "target": ".infra/bin/project-ci-check.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/bin/style-check.sh",
+      "target": ".infra/bin/style-check.sh",
+      "executable": true
+    },
+    {
+      "source": "files/update-infra.sh",
+      "target": "update-infra.sh",
+      "executable": true
+    }
+  ],
+  "profiles": {
+    "ci-default": [
+      {
+        "source": "files/config/ci-default",
+        "target": ".infra/ci/ci.toml",
+        "executable": false
+      }
+    ],
+    "cargo-matrix-default": [
+      {
+        "source": "files/config/cargo-matrix-default",
+        "target": ".infra/ci/cargo-matrix.json",
+        "executable": false
+      }
+    ],
+    "local-path-dependencies-default": [
+      {
+        "source": "files/config/local-path-dependencies-default",
+        "target": ".infra/ci/local-path-dependencies.tsv",
+        "executable": false
+      }
+    ],
+    "dependency-policy-default": [
+      {
+        "source": "files/config/dependency-policy-default",
+        "target": ".infra/dependency/policy.toml",
+        "executable": false
+      }
+    ],
+    "pages-default": [
+      {
+        "source": "files/config/pages-default",
+        "target": ".infra/pages/pages.json",
+        "executable": false
+      }
+    ],
+    "style-exceptions-default": [
+      {
+        "source": "files/config/style-exceptions-default",
+        "target": ".infra/style/exceptions.toml",
+        "executable": false
+      }
+    ]
+  }
+}

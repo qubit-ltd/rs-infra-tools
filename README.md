@@ -29,7 +29,7 @@ Run the fixed bootstrap entry point from any migrated project:
 ./update-infra.sh
 ```
 
-The bootstrap checks `rs-infra-tools/main`, downloads and builds that revision when needed, then runs the upstream script directly from the shared cache. `update-infra.sh` prewarms the latest tool binaries; regular project commands resolve the required tools on demand. Project-specific CI, dependency, Pages, and style settings remain under the project's `.infra` directory.
+The bootstrap checks `rs-infra-tools/main`, downloads and builds that revision when needed, then runs the upstream script directly from the shared cache. `update-infra.sh` in this repository prewarms the latest tool binaries; regular project commands resolve the required tools on demand. Project repositories also carry an upstream-managed root `update-infra.sh` for refreshing their stable bootstrap scripts and wrappers. Run it manually when desired; it lists the files it will overwrite and asks once for confirmation. Pass `--yes` to skip the prompt. `./update-infra.sh --check` verifies the installed snapshot offline, while `--status` compares it with the latest upstream package. CI should run `--check` before infrastructure commands. Project-specific CI, dependency, Pages, and style settings remain under the project's `.infra` directory.
 
 The default shared cache is `${XDG_CACHE_HOME:-~/.cache}/qubit/rs-infra`. Set `RS_INFRA_CACHE_DIR` to choose another cache root. Cached sources and binaries are keyed by Git revision, host target, and Rust compiler version. Network operations retry four times by default with exponential delays; `RS_INFRA_NETWORK_MAX_ATTEMPTS` and `RS_INFRA_NETWORK_RETRY_DELAY_SECONDS` change the retry policy.
 
