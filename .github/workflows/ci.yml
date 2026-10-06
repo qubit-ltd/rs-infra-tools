@@ -29,3 +29,28 @@ jobs:
           echo "RS_INFRA_TOOLS_BIN=$RUNNER_TEMP/rs-infra-tools-target/release/rs-infra-tools" >> "$GITHUB_ENV"
       - run: ./.infra/bin/align-ci.sh
       - run: ./.infra/bin/ci-check.sh
+
+  bootstrap-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - name: Seed a temporary consumer project
+        run: |
+          repo_root=$(cygpath -u "$GITHUB_WORKSPACE")
+          fixture_root="$(cygpath -u "$RUNNER_TEMP")/rs-infra-bootstrap-test"
+          mkdir -p "$fixture_root"
+          python_cmd=python3
+          command -v "$python_cmd" >/dev/null 2>&1 || python_cmd=python
+          "$python_cmd" "$repo_root/assets/project-bootstrap/sync.py" \
+            --project-root "$fixture_root" \
+            --package-root "$repo_root/assets/project-bootstrap" \
+            --yes
+          echo "BOOTSTRAP_TEST_ROOT=$fixture_root" >> "$GITHUB_ENV"
+      - name: Update the consumer and its running updater from upstream
+        run: |
+          cd "$BOOTSTRAP_TEST_ROOT"
+          bash ./update-infra.sh --yes
+          bash ./update-infra.sh --check
