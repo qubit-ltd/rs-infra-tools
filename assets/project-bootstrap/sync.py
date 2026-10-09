@@ -93,7 +93,7 @@ def load_manifest(package: Path) -> dict:
 def config_entries(manifest: dict, checkout_root: Path) -> tuple[list[tuple[dict, Path]], dict[str, str]]:
     """Fetch each owner's main branch and resolve its declared conf files."""
     entries: list[tuple[dict, Path]] = []
-    revisions: dict[str, str] = {}
+    versions: dict[str, str] = {}
     targets = {entry["target"] for entry in manifest["files"]}
     for profile_entries in manifest.get("profiles", {}).values():
         targets.update(entry["target"] for entry in profile_entries)
@@ -103,23 +103,24 @@ def config_entries(manifest: dict, checkout_root: Path) -> tuple[list[tuple[dict
             ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", "main", source["repository"], str(checkout)],
             check=True,
         )
-        revisions[source["name"]] = subprocess.check_output(
-            ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True,
-        ).strip()
         conf = checkout / "conf"
         config_manifest_path = safe_path(conf, "manifest.json")
         if not config_manifest_path.is_file() or config_manifest_path.is_symlink():
             raise ValueError(f"missing regular conf/manifest.json in {source['name']}")
-        config_manifest = json.loads(config_manifest_path.read_text(encoding="utf-8"))
+        manifest_bytes = config_manifest_path.read_bytes().replace(b"\r\n", b"\n")
+        config_manifest = json.loads(manifest_bytes)
         files = config_manifest.get("files")
         if config_manifest.get("version") != 1 or not isinstance(files, list):
             raise ValueError(f"invalid conf/manifest.json in {source['name']}")
+        hasher = hashlib.sha256()
+        hasher.update(b"manifest.json\0" + manifest_bytes)
         for item in files:
             if not isinstance(item, dict) or not isinstance(item.get("source"), str) or not isinstance(item.get("target"), str):
                 raise ValueError(f"invalid config entry in {source['name']}")
             path = safe_path(conf, item["source"])
             if not path.is_file() or path.is_symlink():
                 raise ValueError(f"missing regular config file {item['source']} in {source['name']}")
+            hasher.update(item["source"].encode() + b"\0" + path.read_bytes().replace(b"\r\n", b"\n"))
             relative_target = PurePosixPath(item["target"])
             if relative_target.is_absolute() or not relative_target.parts or ".." in relative_target.parts or "\\" in item["target"]:
                 raise ValueError(f"unsafe config target: {item['target']!r}")
@@ -140,7 +141,8 @@ def config_entries(manifest: dict, checkout_root: Path) -> tuple[list[tuple[dict
             expected = {f".infra/dependency/policy/baselines/{baseline}.{suffix}" for suffix in ("txt", "toml")}
             if baseline is None or len(expected & targets) != 1:
                 raise ValueError("dependency current baseline is absent from conf/manifest.json")
-    return entries, revisions
+        versions[source["name"]] = "sha256:" + hasher.hexdigest()
+    return entries, versions
 
 
 def selected_entries(manifest: dict, project: Path) -> list[dict]:
@@ -273,18 +275,18 @@ def main() -> int:
             entries = [] if args.configs_only else selected_entries(manifest, project)
             package_digest = package_state(package, manifest)
             with tempfile.TemporaryDirectory(prefix="rs-infra-config-") as checkout_directory:
-                external, config_revisions = config_entries(manifest, Path(checkout_directory))
+                external, config_versions = config_entries(manifest, Path(checkout_directory))
                 planned_sources = [(entry, safe_path(package, entry["source"])) for entry in entries] + external
                 package_files = {entry["target"]: {"sha256": digest(source.read_bytes()), "executable": entry["executable"]} for entry, source in planned_sources}
                 old_snapshot, drift = project_state(project)
                 if args.status:
                     current = old_snapshot.get("package_sha256")
-                    if current == package_digest and old_snapshot.get("config_sources", {}) == config_revisions and not drift:
+                    if current == package_digest and old_snapshot.get("config_sources", {}) == config_versions and not drift:
                         print("bootstrap snapshot matches upstream package and shared config")
                         return 0
                     print(f"bootstrap package differs: installed={current or 'missing'} upstream={package_digest}")
-                    if old_snapshot.get("config_sources", {}) != config_revisions:
-                        print("shared config revisions differ")
+                    if old_snapshot.get("config_sources", {}) != config_versions:
+                        print("shared config contents differ")
                     if drift:
                         print("locally modified or missing: " + ", ".join(drift))
                     return 1
@@ -328,7 +330,7 @@ def main() -> int:
                 for path in obsolete:
                     path.unlink()
                 source_revision = revision(package)
-                snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "config_sources": config_revisions, "files": package_files}
+                snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "config_sources": config_versions, "files": package_files}
                 snap_path = safe_path(project, SNAPSHOT.as_posix())
                 snap_path.parent.mkdir(parents=True, exist_ok=True)
                 snap_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")

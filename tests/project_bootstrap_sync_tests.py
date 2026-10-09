@@ -3,10 +3,12 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -140,6 +142,32 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         source_path = self.package / "source/tool.sh"
         source_path.write_bytes(source_path.read_bytes().replace(b"\n", b"\r\n"))
         self.assertEqual(sync.package_state(self.package, manifest), package_sha)
+
+    def test_shared_config_version_tracks_conf_contents(self) -> None:
+        source = Path(self.temp.name) / "source-repo"
+        conf = source / "conf"
+        conf.mkdir(parents=True)
+        (conf / "manifest.json").write_text(json.dumps({"version": 1, "files": [
+            {"source": "defaults.toml", "target": "defaults.toml"}
+        ]}))
+        config = conf / "defaults.toml"
+        config.write_text('version = "1"\n')
+        manifest = sync.load_manifest(self.package)
+        manifest["config_sources"] = [{"name": "rs-infra-ci", "directory": "ci", "repository": str(source)}]
+
+        def copy_checkout(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            shutil.copytree(conf, Path(command[-1]) / "conf")
+            return subprocess.CompletedProcess(command, 0)
+
+        with mock.patch.object(sync.subprocess, "run", side_effect=copy_checkout):
+            _, first = sync.config_entries(manifest, Path(self.temp.name) / "checkout-1")
+            (source / "unrelated.txt").write_text("a later repository commit\n")
+            _, same = sync.config_entries(manifest, Path(self.temp.name) / "checkout-2")
+            config.write_text('version = "2"\n')
+            _, changed = sync.config_entries(manifest, Path(self.temp.name) / "checkout-3")
+
+        self.assertEqual(first, same)
+        self.assertNotEqual(first, changed)
 
 
 if __name__ == "__main__":
