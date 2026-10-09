@@ -66,7 +66,6 @@ impl Tool {
 struct ResolvedTool {
     tool: Tool,
     revision: String,
-    source_dir: PathBuf,
     executable: PathBuf,
 }
 
@@ -113,7 +112,6 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
         resolved.push(ResolvedTool {
             tool: selected,
             revision,
-            source_dir,
             executable,
         });
     }
@@ -134,41 +132,6 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
         env::current_exe().context("failed to resolve current executable")?,
     );
     command.env("PATH", prepend_path(&bin_dir));
-    if let Some(dependency_source) = resolved
-        .iter()
-        .find(|item| item.tool.name == "rs-infra-dependency")
-    {
-        command.env(
-            "RS_INFRA_DEPENDENCY_POLICY_ROOT",
-            &dependency_source.source_dir,
-        );
-    }
-    if env::var_os("RS_INFRA_STYLE_RUSTFMT_CONFIG").is_none()
-        && let Some(style_source) = resolved
-            .iter()
-            .find(|item| item.tool.name == "rs-infra-style")
-    {
-        let upstream = style_source.source_dir.join(".infra/style/rustfmt.toml");
-        if upstream.is_file() {
-            let override_path = env::var_os("RS_INFRA_STYLE_RUSTFMT_CONFIG_OVERRIDE")
-                .map(PathBuf::from)
-                .filter(|path| path.is_file())
-                .or_else(|| {
-                    let path = project.join(".infra/style/rustfmt.toml");
-                    path.is_file().then_some(path)
-                })
-                .or_else(|| {
-                    let path = project.join("rustfmt.toml");
-                    path.is_file().then_some(path)
-                });
-            let config = match override_path {
-                Some(override_path) => merge_rustfmt_config(&cache, &upstream, &override_path)?,
-                None => upstream,
-            };
-            command.env("RS_INFRA_STYLE_RUSTFMT_CONFIG", config);
-        }
-    }
-
     for item in &resolved {
         eprintln!("rs-infra: {}@{} ({host})", item.tool.name, item.revision);
     }
@@ -176,50 +139,6 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
         .status()
         .with_context(|| format!("failed to start {}", selected.name))?;
     Ok(status.code().unwrap_or(1))
-}
-
-fn merge_rustfmt_config(cache: &Path, upstream: &Path, project_override: &Path) -> Result<PathBuf> {
-    let base = fs::read_to_string(upstream).with_context(|| {
-        format!(
-            "failed to read upstream rustfmt config {}",
-            upstream.display()
-        )
-    })?;
-    let override_text = fs::read_to_string(project_override).with_context(|| {
-        format!(
-            "failed to read project rustfmt config {}",
-            project_override.display()
-        )
-    })?;
-    let keys = override_text
-        .lines()
-        .filter_map(|line| line.split_once('=').map(|(key, _)| key.trim().to_owned()))
-        .collect::<std::collections::BTreeSet<_>>();
-    let mut merged = base
-        .lines()
-        .filter(|line| {
-            line.split_once('=')
-                .is_none_or(|(key, _)| !keys.contains(key.trim()))
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    if !merged.is_empty() && !merged.ends_with('\n') {
-        merged.push('\n');
-    }
-    merged.push_str(&override_text);
-    if !merged.ends_with('\n') {
-        merged.push('\n');
-    }
-    let key = format!(
-        "{:x}",
-        Sha256::digest(format!("{base}\0{override_text}").as_bytes())
-    );
-    let path = cache.join("config/style").join(key).join("rustfmt.toml");
-    if !path.is_file() {
-        fs::create_dir_all(path.parent().context("merged config has no parent")?)?;
-        fs::write(&path, merged).with_context(|| format!("failed to cache {}", path.display()))?;
-    }
-    Ok(path)
 }
 
 /// Resolves and builds every supported tool without changing the project tree.
@@ -247,7 +166,6 @@ pub fn prewarm(_project: &Path) -> Result<()> {
         resolved.push(ResolvedTool {
             tool: *tool,
             revision,
-            source_dir,
             executable,
         });
     }
@@ -602,7 +520,6 @@ mod tests {
     use super::Tool;
     use super::executable_file_name;
     use super::invocation_bin_dir;
-    use super::merge_rustfmt_config;
 
     #[test]
     fn invocation_bin_dir_contains_tools_and_repairs_incomplete_cache() {
@@ -616,7 +533,6 @@ mod tests {
         let tools = [ResolvedTool {
             tool: Tool::new("rs-infra-verify", "rs-infra-verify", "qubit-infra-verify"),
             revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            source_dir: directory.path().join("source"),
             executable,
         }];
 
@@ -630,21 +546,5 @@ mod tests {
             std::fs::read(repaired.join(executable_file_name("rs-infra-verify"))).unwrap(),
             b"tool binary"
         );
-    }
-
-    #[test]
-    fn project_rustfmt_values_override_upstream_defaults() {
-        let directory = tempfile::tempdir().unwrap();
-        let upstream = directory.path().join("upstream.toml");
-        let project = directory.path().join("project.toml");
-        std::fs::write(&upstream, "edition = \"2024\"\nmax_width = 120\n").unwrap();
-        std::fs::write(&project, "max_width = 80\n").unwrap();
-
-        let merged = merge_rustfmt_config(directory.path(), &upstream, &project).unwrap();
-        let text = std::fs::read_to_string(merged).unwrap();
-
-        assert!(text.contains("edition = \"2024\""));
-        assert!(text.contains("max_width = 80"));
-        assert!(!text.contains("max_width = 120"));
     }
 }

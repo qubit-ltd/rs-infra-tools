@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import shutil
 import stat
 import subprocess
@@ -67,7 +68,79 @@ def load_manifest(package: Path) -> dict:
         targets.add(target)
         if not isinstance(entry.get("executable"), bool):
             raise ValueError(f"missing executable flag for {target}")
+    sources = manifest.get("config_sources", [])
+    if not isinstance(sources, list):
+        raise ValueError("config_sources must be an array")
+    names: set[str] = set()
+    directories: set[str] = set()
+    for source in sources:
+        if not isinstance(source, dict):
+            raise ValueError("invalid config source")
+        name, directory, repository = (source.get(key) for key in ("name", "directory", "repository"))
+        if not all(isinstance(value, str) and value for value in (name, directory, repository)):
+            raise ValueError("config source name, directory and repository must be nonempty strings")
+        if name in names or directory in directories:
+            raise ValueError(f"duplicate config source: {name}")
+        if "/" in name or "\\" in name or name in {".", ".."}:
+            raise ValueError(f"invalid config source name: {name}")
+        if "/" in directory or "\\" in directory or directory in {".", ".."}:
+            raise ValueError(f"invalid config directory: {directory}")
+        names.add(name)
+        directories.add(directory)
     return manifest
+
+
+def config_entries(manifest: dict, checkout_root: Path) -> tuple[list[tuple[dict, Path]], dict[str, str]]:
+    """Fetch each owner's main branch and resolve its declared conf files."""
+    entries: list[tuple[dict, Path]] = []
+    revisions: dict[str, str] = {}
+    targets = {entry["target"] for entry in manifest["files"]}
+    for profile_entries in manifest.get("profiles", {}).values():
+        targets.update(entry["target"] for entry in profile_entries)
+    for source in manifest.get("config_sources", []):
+        checkout = checkout_root / source["name"]
+        subprocess.run(
+            ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", "main", source["repository"], str(checkout)],
+            check=True,
+        )
+        revisions[source["name"]] = subprocess.check_output(
+            ["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True,
+        ).strip()
+        conf = checkout / "conf"
+        config_manifest_path = safe_path(conf, "manifest.json")
+        if not config_manifest_path.is_file() or config_manifest_path.is_symlink():
+            raise ValueError(f"missing regular conf/manifest.json in {source['name']}")
+        config_manifest = json.loads(config_manifest_path.read_text(encoding="utf-8"))
+        files = config_manifest.get("files")
+        if config_manifest.get("version") != 1 or not isinstance(files, list):
+            raise ValueError(f"invalid conf/manifest.json in {source['name']}")
+        for item in files:
+            if not isinstance(item, dict) or not isinstance(item.get("source"), str) or not isinstance(item.get("target"), str):
+                raise ValueError(f"invalid config entry in {source['name']}")
+            path = safe_path(conf, item["source"])
+            if not path.is_file() or path.is_symlink():
+                raise ValueError(f"missing regular config file {item['source']} in {source['name']}")
+            relative_target = PurePosixPath(item["target"])
+            if relative_target.is_absolute() or not relative_target.parts or ".." in relative_target.parts or "\\" in item["target"]:
+                raise ValueError(f"unsafe config target: {item['target']!r}")
+            target = f".infra/{source['directory']}/{item['target']}"
+            safe_path(Path("/project-root"), target)
+            if target in targets:
+                raise ValueError(f"duplicate manifest target: {target}")
+            targets.add(target)
+            entries.append(({"target": target, "executable": False}, path))
+        if source["name"] == "rs-infra-dependency":
+            current = conf / "policy/current.toml"
+            if not current.is_file() or current.is_symlink():
+                raise ValueError("dependency current baseline pointer is missing")
+            if not {".infra/dependency/policy.toml", ".infra/dependency/policy/current.toml"} <= targets:
+                raise ValueError("dependency policy and current pointer must be installed together")
+            match = re.fullmatch(r'\s*baseline\s*=\s*"([A-Za-z0-9._-]+)"\s*', current.read_text(encoding="utf-8"))
+            baseline = match.group(1) if match else None
+            expected = {f".infra/dependency/policy/baselines/{baseline}.{suffix}" for suffix in ("txt", "toml")}
+            if baseline is None or len(expected & targets) != 1:
+                raise ValueError("dependency current baseline is absent from conf/manifest.json")
+    return entries, revisions
 
 
 def selected_entries(manifest: dict, project: Path) -> list[dict]:
@@ -130,6 +203,19 @@ def project_state(project: Path) -> tuple[dict, list[str]]:
     return snapshot, drift
 
 
+def obsolete_baselines(project: Path, snapshot: dict, current_targets: set[str]) -> list[Path]:
+    """Find previous managed baselines that the current manifest no longer installs."""
+    obsolete = []
+    for target, record in snapshot.get("files", {}).items():
+        if not target.startswith(".infra/dependency/policy/baselines/") or target in current_targets:
+            continue
+        path = safe_path(project, target)
+        if not path.is_file() or path.is_symlink() or digest(path.read_bytes()) != record.get("sha256"):
+            raise ValueError(f"obsolete baseline was modified or is missing: {target}")
+        obsolete.append(path)
+    return obsolete
+
+
 def revision(package: Path) -> str:
     value = os.environ.get("RS_INFRA_SOURCE_REVISION")
     if value:
@@ -160,73 +246,91 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
     parser.add_argument("--package-root", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--configs-only", action="store_true", help="install shared config without replacing project bootstrap scripts")
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--yes", action="store_true", help="overwrite managed files without prompting")
     modes.add_argument("--dry-run", action="store_true", help="list targets without writing")
     modes.add_argument("--status", action="store_true", help="compare this package with the installed snapshot")
+    modes.add_argument("--check", action="store_true", help="check the installed snapshot without fetching")
     args = parser.parse_args()
     project = args.project_root.resolve()
     package = args.package_root.resolve()
     try:
         try:
-            manifest = load_manifest(package)
-            entries = selected_entries(manifest, project)
-            package_digest = package_state(package, manifest)
-            package_files = {entry["target"]: {"sha256": digest(safe_path(package, entry["source"]).read_bytes()), "executable": entry["executable"]} for entry in entries}
-            old_snapshot, drift = project_state(project)
-            if args.status:
-                current = old_snapshot.get("package_sha256")
-                if current == package_digest:
-                    print("bootstrap snapshot matches upstream package")
-                    return 0
-                print(f"bootstrap package differs: installed={current or 'missing'} upstream={package_digest}")
+            if args.check:
+                _, drift = project_state(project)
                 if drift:
                     print("locally modified or missing: " + ", ".join(drift))
-                return 1
-
-            targets = [entry["target"] for entry in entries] + [SNAPSHOT.as_posix()]
-            print(f"rs-infra-tools {revision(package)} will overwrite {len(targets)} paths:")
-            for target in targets:
-                print(f"  {target}")
-            if args.dry_run:
+                    return 1
+                print("installed shared config snapshot matches")
                 return 0
-            if not args.yes:
-                if not sys.stdin.isatty():
-                    print("error: confirmation requires an interactive terminal; pass --yes to overwrite", file=sys.stderr)
-                    return 2
-                answer = input("Overwrite these paths with the upstream versions? [y/N] ").strip().lower()
-                if answer not in {"y", "yes"}:
-                    print("cancelled")
+            manifest = load_manifest(package)
+            entries = [] if args.configs_only else selected_entries(manifest, project)
+            package_digest = package_state(package, manifest)
+            with tempfile.TemporaryDirectory(prefix="rs-infra-config-") as checkout_directory:
+                external, config_revisions = config_entries(manifest, Path(checkout_directory))
+                planned_sources = [(entry, safe_path(package, entry["source"])) for entry in entries] + external
+                package_files = {entry["target"]: {"sha256": digest(source.read_bytes()), "executable": entry["executable"]} for entry, source in planned_sources}
+                old_snapshot, drift = project_state(project)
+                if args.status:
+                    current = old_snapshot.get("package_sha256")
+                    if current == package_digest and old_snapshot.get("config_sources", {}) == config_revisions and not drift:
+                        print("bootstrap snapshot matches upstream package and shared config")
+                        return 0
+                    print(f"bootstrap package differs: installed={current or 'missing'} upstream={package_digest}")
+                    if old_snapshot.get("config_sources", {}) != config_revisions:
+                        print("shared config revisions differ")
+                    if drift:
+                        print("locally modified or missing: " + ", ".join(drift))
                     return 1
 
-            planned: list[tuple[dict, Path, bytes]] = []
-            for entry in entries:
-                source = safe_path(package, entry["source"])
-                target = safe_path(project, entry["target"])
-                if target.exists() and not target.is_file():
-                    raise ValueError(f"target is not a regular file: {entry['target']}")
-                planned.append((entry, target, source.read_bytes()))
-            for entry, target, data in planned:
-                target.parent.mkdir(parents=True, exist_ok=True)
-                fd, temp_name = tempfile.mkstemp(prefix=".infra-update-", dir=target.parent)
-                try:
-                    with os.fdopen(fd, "wb") as stream:
-                        stream.write(data)
-                    target_mode = 0o755 if entry["executable"] else 0o644
-                    os.chmod(temp_name, target_mode)
-                    os.replace(temp_name, target)
-                finally:
-                    if os.path.exists(temp_name):
-                        os.unlink(temp_name)
-            source_revision = revision(package)
-            snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "files": package_files}
-            snap_path = safe_path(project, SNAPSHOT.as_posix())
-            snap_path.parent.mkdir(parents=True, exist_ok=True)
-            snap_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-            os.chmod(snap_path, 0o644)
-            print("bootstrap files updated")
-            return 0
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+                obsolete = obsolete_baselines(project, old_snapshot, set(package_files))
+                targets = [entry["target"] for entry, _ in planned_sources] + [SNAPSHOT.as_posix()]
+                print(f"rs-infra-tools {revision(package)} will overwrite {len(targets)} paths:")
+                for target in targets:
+                    print(f"  {target}")
+                for path in obsolete:
+                    print(f"  remove {path.relative_to(project)}")
+                if args.dry_run:
+                    return 0
+                if not args.yes:
+                    if not sys.stdin.isatty():
+                        print("error: confirmation requires an interactive terminal; pass --yes to overwrite", file=sys.stderr)
+                        return 2
+                    answer = input("Overwrite these paths with the upstream versions? [y/N] ").strip().lower()
+                    if answer not in {"y", "yes"}:
+                        print("cancelled")
+                        return 1
+
+                planned: list[tuple[dict, Path, bytes]] = []
+                for entry, source in planned_sources:
+                    target = safe_path(project, entry["target"])
+                    if target.exists() and not target.is_file():
+                        raise ValueError(f"target is not a regular file: {entry['target']}")
+                    planned.append((entry, target, source.read_bytes()))
+                for entry, target, data in planned:
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    fd, temp_name = tempfile.mkstemp(prefix=".infra-update-", dir=target.parent)
+                    try:
+                        with os.fdopen(fd, "wb") as stream:
+                            stream.write(data)
+                        target_mode = 0o755 if entry["executable"] else 0o644
+                        os.chmod(temp_name, target_mode)
+                        os.replace(temp_name, target)
+                    finally:
+                        if os.path.exists(temp_name):
+                            os.unlink(temp_name)
+                for path in obsolete:
+                    path.unlink()
+                source_revision = revision(package)
+                snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "config_sources": config_revisions, "files": package_files}
+                snap_path = safe_path(project, SNAPSHOT.as_posix())
+                snap_path.parent.mkdir(parents=True, exist_ok=True)
+                snap_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+                os.chmod(snap_path, 0o644)
+                print("bootstrap files updated")
+                return 0
+        except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 2
     finally:

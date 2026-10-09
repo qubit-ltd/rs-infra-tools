@@ -1,5 +1,17 @@
 {
   "version": 1,
+  "config_sources": [
+    {
+      "name": "rs-infra-style",
+      "directory": "style",
+      "repository": "https://github.com/qubit-ltd/rs-infra-style.git"
+    },
+    {
+      "name": "rs-infra-dependency",
+      "directory": "dependency",
+      "repository": "https://github.com/qubit-ltd/rs-infra-dependency.git"
+    }
+  ],
   "files": [
     {
       "source": "files/.infra/bootstrap.sh",
@@ -72,17 +84,11 @@
         "executable": false
       }
     ],
+    "dependency-policy-default": [],
     "local-path-dependencies-default": [
       {
         "source": "files/config/local-path-dependencies-default",
         "target": ".infra/ci/local-path-dependencies.tsv",
-        "executable": false
-      }
-    ],
-    "dependency-policy-default": [
-      {
-        "source": "files/config/dependency-policy-default",
-        "target": ".infra/dependency/policy.toml",
         "executable": false
       }
     ],
