@@ -8,7 +8,7 @@ source "$shared_root/.infra/lib/cleanup-build-artifacts.sh"
 cd "$project_root"
 mkdir -p target/llvm-cov/html
 
-coverage_config="$project_root/.infra/ci/coverage.json"
+coverage_config="$project_root/.infra/coverage/coverage.json"
 coverage_scope="default-members"
 if [ -f "$coverage_config" ]; then
     coverage_scope=$(jq -r '.scope // "default-members"' "$coverage_config")
@@ -90,13 +90,7 @@ jq -n --arg message "${line_percent}%" --arg color "$color" \
     echo '- LCOV report: artifact `coverage-reports`, path `lcov.info`.'
     echo '- Shields endpoint: artifact `coverage-reports`, path `coverage-badge.json`.'
     echo
-    echo '<details><summary>Text summary</summary>'
-    echo
-    echo '```text'
-    cat coverage.txt
-    echo '```'
-    echo
-    echo '</details>'
+    echo '- Full text report: artifact `coverage-reports`, path `coverage.txt`.'
 } > coverage-summary.md
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     cat coverage-summary.md >> "$GITHUB_STEP_SUMMARY"
