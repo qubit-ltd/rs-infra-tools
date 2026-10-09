@@ -23,7 +23,7 @@ cargo install --git https://github.com/qubit-ltd/rs-infra-tools.git --tag v0.1.0
 ./update-infra.sh
 ```
 
-入口会先检查 `rs-infra-tools/main` 的最新提交；本地缓存没有对应版本时，再下载并编译。随后它直接运行共享缓存中的上游脚本。普通项目命令按需解析和运行工具。各项目仓库有一个由上游管理的根目录 `update-infra.sh`，用于手动更新相对稳定的 bootstrap 脚本和包装脚本；工具仓库使用只同步公共配置的模式，保留其现有工具脚本。默认会列出覆盖文件并提示一次；传入 `--yes` 可跳过提示。更新器会拉取已登记工具仓库的 `main` 分支，把各自 `conf/manifest.json` 声明的文件安装到项目对应的 `.infra` 目录，包括公共 rustfmt 配置和当前依赖策略 baseline；项目不能自行选择 baseline 版本。`./update-infra.sh --check` 检查已安装快照，`--status` 则与上游最新公共包及配置版本比较。CI 应在运行基础设施命令前执行 `--check`。项目专属的 CI、Pages 和风格例外配置仍保存在项目自己的 `.infra` 目录中。
+入口会先检查 `rs-infra-tools/main` 的最新提交；本地缓存没有对应版本时，再下载并编译。随后它直接运行共享缓存中的上游脚本。普通项目命令按需解析和运行工具。各项目仓库有一个由上游管理的根目录 `update-infra.sh`，用于手动更新相对稳定的 bootstrap 脚本和包装脚本；工具仓库使用只同步公共配置的模式，保留其现有工具脚本。默认会列出覆盖文件并提示一次；传入 `--yes` 可跳过提示。更新器会拉取已登记工具仓库的 `main` 分支，把各自 `conf/manifest.json` 声明的文件安装到项目对应的 `.infra` 目录，包括公共 CI 工具版本、rustfmt 配置和当前依赖策略 baseline；项目不能自行选择 baseline 版本。`./update-infra.sh --check` 检查已安装快照，`--status` 则与上游最新公共包及配置版本比较。CI 应在运行基础设施命令前执行 `--check`。项目专属的 CI 任务、Pages 和风格例外配置仍保存在项目自己的 `.infra` 目录中。
 
 默认共享缓存位于 `${XDG_CACHE_HOME:-~/.cache}/qubit/rs-infra`。设置 `RS_INFRA_CACHE_DIR` 可以更换缓存根目录。源码和编译结果按 Git 提交、主机目标及 Rust 编译器版本区分。网络操作默认最多重试 4 次，等待时间按 2、4、8 秒递增；可以用 `RS_INFRA_NETWORK_MAX_ATTEMPTS` 和 `RS_INFRA_NETWORK_RETRY_DELAY_SECONDS` 调整策略。
 

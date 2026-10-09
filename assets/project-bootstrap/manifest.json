@@ -2,6 +2,11 @@
   "version": 1,
   "config_sources": [
     {
+      "name": "rs-infra-ci",
+      "directory": "ci",
+      "repository": "https://github.com/qubit-ltd/rs-infra-ci.git"
+    },
+    {
       "name": "rs-infra-style",
       "directory": "style",
       "repository": "https://github.com/qubit-ltd/rs-infra-style.git"
