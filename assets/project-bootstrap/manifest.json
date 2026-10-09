@@ -84,7 +84,6 @@
         "executable": false
       }
     ],
-    "dependency-policy-default": [],
     "local-path-dependencies-default": [
       {
         "source": "files/config/local-path-dependencies-default",

@@ -164,6 +164,11 @@ def selected_entries(manifest: dict, project: Path) -> list[dict]:
     known = manifest.get("profiles", {})
     for name in profiles:
         if name not in known:
+            if name == "dependency-policy-default":
+                raise ValueError(
+                    "obsolete bootstrap profile dependency-policy-default; remove it from "
+                    ".infra/bootstrap-update.toml (dependency policy is installed automatically)"
+                )
             raise ValueError(f"unknown bootstrap profile: {name}")
         entries.extend(known[name])
     return entries
