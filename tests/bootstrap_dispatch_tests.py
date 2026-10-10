@@ -9,7 +9,7 @@ import unittest
 
 
 REPO = Path(__file__).resolve().parents[1]
-BOOTSTRAP = REPO / "assets/bootstrap.sh"
+BOOTSTRAP = REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh"
 
 
 class BootstrapDispatchTests(unittest.TestCase):
@@ -48,7 +48,12 @@ class BootstrapDispatchTests(unittest.TestCase):
 
             shared_lib = shared / ".infra/lib"
             shared_lib.mkdir(parents=True)
-            for name in ("infra-tool", "prepare-local-path-dependencies", "dependency-update"):
+            for name in (
+                "infra-tool",
+                "prepare-local-path-dependencies",
+                "dependency-update",
+                "coverage-report",
+            ):
                 helper = shared_lib / f"{name}.sh"
                 helper.write_text(
                     "#!/usr/bin/env bash\n"
@@ -103,6 +108,8 @@ class BootstrapDispatchTests(unittest.TestCase):
                 expected_log = expected
                 if entrypoint in {"align-ci", "ci-check", "coverage", "style-check"}:
                     expected_log = ["prepare-local-path-dependencies", *expected]
+                if entrypoint == "coverage":
+                    expected_log.append("coverage-report")
                 self.assertEqual(call_log.read_text().splitlines(), expected_log, entrypoint)
 
             call_log.unlink(missing_ok=True)
