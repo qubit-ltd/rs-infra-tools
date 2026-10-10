@@ -37,9 +37,13 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         updater = (PACKAGE / "files/update-infra.sh").read_text()
         manager_bootstrap = (PACKAGE / "files/.infra/bootstrap.sh").read_text()
         current_bootstrap = (REPO / ".infra/bootstrap.sh").read_text()
+        repository_updater = (REPO / "update-infra.sh").read_text()
+        manager_updater = (REPO / "assets/bootstrap.sh").read_text()
         self.assertIn("repository=https://github.com/qubit-ltd/rs-infra-tools.git", updater)
         self.assertIn("manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git", manager_bootstrap)
         self.assertIn("manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git", current_bootstrap)
+        self.assertIn("repository=https://github.com/qubit-ltd/rs-infra-tools.git", repository_updater)
+        self.assertIn("manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git", manager_updater)
         with mock.patch.object(sync.subprocess, "run", side_effect=AssertionError("unexpected clone")):
             entries, versions = sync.config_entries(
                 {"files": [], "config_sources": [
