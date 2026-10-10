@@ -342,6 +342,23 @@ def main() -> int:
                         print("locally modified or missing: " + ", ".join(drift))
                     return 1
 
+                if args.configs_only:
+                    package_targets = {entry["target"] for entry in manifest["files"]}
+                    for profile_entries in manifest.get("profiles", {}).values():
+                        package_targets.update(entry["target"] for entry in profile_entries)
+                    config_prefixes = tuple(
+                        f".infra/{source['directory']}/" for source in manifest.get("config_sources", [])
+                    )
+                    retired_targets = set(manifest.get("retired_targets", []))
+                    retained = {
+                        target: record for target, record in old_snapshot.get("files", {}).items()
+                        if target not in retired_targets
+                        and not target.startswith(".infra/dependency/policy/baselines/")
+                        and (target in package_targets or not target.startswith(config_prefixes))
+                    }
+                    retained.update(package_files)
+                    package_files = retained
+
                 current_targets = set(package_files)
                 obsolete = obsolete_baselines(project, old_snapshot, current_targets)
                 obsolete.extend(retired_config_paths(project, manifest, old_snapshot, current_targets))

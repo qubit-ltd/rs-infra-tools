@@ -371,6 +371,43 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertTrue(old.exists())
         self.assertFalse((self.project / ".infra/tools/defaults.toml").exists())
 
+    def test_configs_only_preserves_package_records_and_retires_old_defaults(self) -> None:
+        old = self.install_old_defaults()
+        self.write_manager_config()
+        self.enable_defaults_retirement()
+        tool = self.project / ".infra/tool.sh"
+        original_record = json.loads((self.project / ".infra/bootstrap-source.json").read_text())["files"][".infra/tool.sh"]
+        tool.write_text("user modified script\n")
+        result = self.run_sync("--configs-only", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(old.exists())
+        self.assertEqual(tool.read_text(), "user modified script\n")
+        snapshot, drift = sync.project_state(self.project)
+        self.assertEqual(snapshot["files"][".infra/tool.sh"], original_record)
+        self.assertEqual(drift, [".infra/tool.sh"])
+        self.assertNotIn(".infra/ci/defaults.toml", snapshot["files"])
+        self.assertIn(".infra/tools/defaults.toml", snapshot["files"])
+
+    def test_configs_only_omits_obsolete_baseline_from_snapshot(self) -> None:
+        self.write_manager_config()
+        first = self.run_sync("--yes")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        baseline = self.project / ".infra/dependency/policy/baselines/old.txt"
+        baseline.parent.mkdir(parents=True)
+        baseline.write_text("old baseline\n")
+        snapshot_path = self.project / ".infra/bootstrap-source.json"
+        snapshot = json.loads(snapshot_path.read_text())
+        snapshot["files"][".infra/dependency/policy/baselines/old.txt"] = {
+            "sha256": sync.digest(baseline.read_bytes()), "executable": False
+        }
+        snapshot_path.write_text(json.dumps(snapshot))
+        result = self.run_sync("--configs-only", "--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(baseline.exists())
+        later, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(".infra/dependency/policy/baselines/old.txt", later["files"])
+
 
 if __name__ == "__main__":
     unittest.main()
