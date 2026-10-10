@@ -31,9 +31,15 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         )
         self.assertIn(".infra/ci/defaults.toml", manifest["retired_targets"])
         self.assertTrue(all(
-            source.get("local") == "manager" or source["repository"].startswith("git@github.com:")
+            source.get("local") == "manager" or source["repository"].startswith("https://github.com/qubit-ltd/")
             for source in manifest["config_sources"]
         ))
+        updater = (PACKAGE / "files/update-infra.sh").read_text()
+        manager_bootstrap = (PACKAGE / "files/.infra/bootstrap.sh").read_text()
+        current_bootstrap = (REPO / ".infra/bootstrap.sh").read_text()
+        self.assertIn("repository=https://github.com/qubit-ltd/rs-infra-tools.git", updater)
+        self.assertIn("manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git", manager_bootstrap)
+        self.assertIn("manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git", current_bootstrap)
         with mock.patch.object(sync.subprocess, "run", side_effect=AssertionError("unexpected clone")):
             entries, versions = sync.config_entries(
                 {"files": [], "config_sources": [
@@ -209,7 +215,7 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         (source / "config.toml").write_text("value = 1\n")
         manifest = sync.load_manifest(self.package)
         manifest["config_sources"] = [
-            {"name": "rs-infra-ci", "directory": "ci", "repository": "git@github.com:qubit-ltd/rs-infra-ci.git"}
+            {"name": "rs-infra-ci", "directory": "ci", "repository": "https://github.com/qubit-ltd/rs-infra-ci.git"}
         ]
         calls = 0
 
@@ -233,7 +239,7 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
     def test_external_config_clone_stops_after_bounded_attempts(self) -> None:
         manifest = sync.load_manifest(self.package)
         manifest["config_sources"] = [
-            {"name": "rs-infra-ci", "directory": "ci", "repository": "git@github.com:qubit-ltd/rs-infra-ci.git"}
+            {"name": "rs-infra-ci", "directory": "ci", "repository": "https://github.com/qubit-ltd/rs-infra-ci.git"}
         ]
         with mock.patch.object(sync.subprocess, "run", side_effect=subprocess.CalledProcessError(128, ["git", "clone"])) as clone:
             with mock.patch("time.sleep") as pause:
@@ -442,11 +448,11 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertEqual(status.returncode, 1, status.stdout + status.stderr)
         self.assertIn("bootstrap package differs", status.stdout)
 
-    def test_snapshot_records_ssh_manager_repository(self) -> None:
+    def test_snapshot_records_https_manager_repository(self) -> None:
         result = self.run_sync("--yes")
         self.assertEqual(result.returncode, 0, result.stderr)
         snapshot, _ = sync.project_state(self.project)
-        self.assertEqual(snapshot["source_repository"], "git@github.com:qubit-ltd/rs-infra-tools.git")
+        self.assertEqual(snapshot["source_repository"], "https://github.com/qubit-ltd/rs-infra-tools.git")
 
 
 if __name__ == "__main__":
