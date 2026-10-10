@@ -292,9 +292,40 @@ def main() -> int:
                     return 1
 
                 obsolete = obsolete_baselines(project, old_snapshot, set(package_files))
-                targets = [entry["target"] for entry, _ in planned_sources] + [SNAPSHOT.as_posix()]
-                print(f"rs-infra-tools {revision(package)} will overwrite {len(targets)} paths:")
-                for target in targets:
+                planned: list[tuple[dict, Path, bytes]] = []
+                for entry, source in planned_sources:
+                    target = safe_path(project, entry["target"])
+                    if target.exists() and not target.is_file():
+                        raise ValueError(f"target is not a regular file: {entry['target']}")
+                    data = source.read_bytes()
+                    if target.is_file():
+                        current_mode = bool(target.stat().st_mode & stat.S_IXUSR)
+                        same_content = digest(target.read_bytes()) == digest(data)
+                        same_mode = executable_mode_matches(current_mode, entry["executable"])
+                        if same_content and same_mode:
+                            continue
+                    planned.append((entry, target, data))
+
+                source_revision = revision(package)
+                snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "config_sources": config_versions, "files": package_files}
+                snapshot_data = json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
+                snap_path = safe_path(project, SNAPSHOT.as_posix())
+                if snap_path.exists() and not snap_path.is_file():
+                    raise ValueError(f"target is not a regular file: {SNAPSHOT.as_posix()}")
+                snapshot_changed = (
+                    not snap_path.is_file()
+                    or digest(snap_path.read_bytes()) != digest(snapshot_data.encode())
+                    or bool(snap_path.stat().st_mode & stat.S_IXUSR)
+                )
+                changed_targets = [entry["target"] for entry, _, _ in planned]
+                if snapshot_changed:
+                    changed_targets.append(SNAPSHOT.as_posix())
+                if not changed_targets and not obsolete:
+                    print("bootstrap files are already up to date")
+                    return 0
+
+                print(f"rs-infra-tools {source_revision} will update {len(changed_targets)} paths:")
+                for target in changed_targets:
                     print(f"  {target}")
                 for path in obsolete:
                     print(f"  remove {path.relative_to(project)}")
@@ -309,12 +340,6 @@ def main() -> int:
                         print("cancelled")
                         return 1
 
-                planned: list[tuple[dict, Path, bytes]] = []
-                for entry, source in planned_sources:
-                    target = safe_path(project, entry["target"])
-                    if target.exists() and not target.is_file():
-                        raise ValueError(f"target is not a regular file: {entry['target']}")
-                    planned.append((entry, target, source.read_bytes()))
                 for entry, target, data in planned:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     fd, temp_name = tempfile.mkstemp(prefix=".infra-update-", dir=target.parent)
@@ -329,12 +354,10 @@ def main() -> int:
                             os.unlink(temp_name)
                 for path in obsolete:
                     path.unlink()
-                source_revision = revision(package)
-                snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools", "source_revision": source_revision, "package_sha256": package_digest, "config_sources": config_versions, "files": package_files}
-                snap_path = safe_path(project, SNAPSHOT.as_posix())
-                snap_path.parent.mkdir(parents=True, exist_ok=True)
-                snap_path.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-                os.chmod(snap_path, 0o644)
+                if snapshot_changed:
+                    snap_path.parent.mkdir(parents=True, exist_ok=True)
+                    snap_path.write_text(snapshot_data, encoding="utf-8")
+                    os.chmod(snap_path, 0o644)
                 print("bootstrap files updated")
                 return 0
         except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
