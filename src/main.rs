@@ -84,6 +84,10 @@ fn main() {
     }
 }
 
+/// Runs the selected tool operation and returns its process exit code.
+///
+/// Errors from tool resolution or execution are returned to `main` for
+/// consistent reporting on stderr.
 fn execute(command: Command) -> Result<i32> {
     match command {
         Command::Ensure { lock, tool } => {
@@ -105,11 +109,7 @@ fn execute(command: Command) -> Result<i32> {
             }
             Ok(code)
         }
-        Command::Latest {
-            project,
-            tool,
-            args,
-        } => runtime::run_latest(&project, &tool, &args),
+        Command::Latest { project, tool, args } => runtime::run_latest(&project, &tool, &args),
         Command::Prewarm { project } => {
             runtime::prewarm(&project)?;
             eprintln!("✅ rs-infra-tools: latest tool cache prepared");

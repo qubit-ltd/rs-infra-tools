@@ -262,7 +262,7 @@ mod tests {
     use crate::lock::LockEntry;
 
     #[test]
-    fn local_artifact_is_cached_and_reused() {
+    fn test_local_artifact_is_cached_and_reused() {
         let source = tempfile::NamedTempFile::new().unwrap();
         let mut file = source.reopen().unwrap();
         file.write_all(b"#!/bin/sh\nprintf cached\n").unwrap();

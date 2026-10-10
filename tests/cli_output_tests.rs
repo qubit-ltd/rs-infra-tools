@@ -20,7 +20,7 @@ fn digest(bytes: &[u8]) -> String {
 
 #[test]
 #[cfg(unix)]
-fn ensure_reports_success_without_corrupting_path_output() {
+fn test_ensure_reports_success_without_corrupting_path_output() {
     let directory = tempfile::tempdir().unwrap();
     let artifact = directory.path().join("tool");
     let bytes = b"#!/bin/sh\nexit 0\n";
@@ -51,7 +51,7 @@ fn ensure_reports_success_without_corrupting_path_output() {
 
 #[test]
 #[cfg(unix)]
-fn exec_reports_child_failure_and_preserves_exit_code() {
+fn test_exec_reports_child_failure_and_preserves_exit_code() {
     let directory = tempfile::tempdir().unwrap();
     let artifact = directory.path().join("tool");
     let bytes = b"#!/bin/sh\nexit 7\n";
@@ -80,7 +80,7 @@ fn exec_reports_child_failure_and_preserves_exit_code() {
 }
 
 #[test]
-fn invalid_lock_reports_failure_message() {
+fn test_invalid_lock_reports_failure_message() {
     let directory = tempfile::tempdir().unwrap();
     let lock = directory.path().join("missing.lock");
     let output = Command::new(env!("CARGO_BIN_EXE_rs-infra-tools"))

@@ -5,7 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-//! Resolves and runs the latest main-branch infrastructure tools from a shared cache.
+//! Resolves and runs the latest main-branch infrastructure tools from a shared
+//! cache.
 
 use std::env;
 use std::fs;
@@ -26,30 +27,27 @@ use sha2::Sha256;
 
 const TOOLS: &[Tool] = &[
     Tool::new("rs-infra-ci", "rs-infra-ci", "qubit-infra-ci"),
-    Tool::new(
-        "rs-infra-coverage",
-        "rs-infra-coverage",
-        "qubit-infra-coverage",
-    ),
-    Tool::new(
-        "rs-infra-dependency",
-        "rs-infra-dependency",
-        "qubit-infra-dependency",
-    ),
+    Tool::new("rs-infra-coverage", "rs-infra-coverage", "qubit-infra-coverage"),
+    Tool::new("rs-infra-dependency", "rs-infra-dependency", "qubit-infra-dependency"),
     Tool::new("rs-infra-pages", "rs-infra-pages", "qubit-infra-pages"),
     Tool::new("rs-infra-style", "rs-infra-style", "qubit-infra-style"),
     Tool::new("rs-infra-verify", "rs-infra-verify", "qubit-infra-verify"),
 ];
 const MANAGER: Tool = Tool::new("rs-infra-tools", "rs-infra-tools", "qubit-infra-tools");
 
+/// Identifies one infrastructure tool and the Cargo package that builds it.
 #[derive(Clone, Copy)]
 struct Tool {
+    /// The binary name exposed to callers.
     name: &'static str,
+    /// The GitHub repository containing the tool.
     repository: &'static str,
+    /// The Cargo package that owns the binary.
     package: &'static str,
 }
 
 impl Tool {
+    /// Creates a static description of an infrastructure tool.
     const fn new(name: &'static str, repository: &'static str, package: &'static str) -> Self {
         Self {
             name,
@@ -58,32 +56,49 @@ impl Tool {
         }
     }
 
+    /// Returns the clone URL for the tool's repository.
     fn source(self) -> String {
         format!("https://github.com/qubit-ltd/{}.git", self.repository)
     }
 }
 
+/// Holds the selected tool's resolved revision and cached executable path.
 struct ResolvedTool {
+    /// The tool represented by this resolved entry.
     tool: Tool,
+    /// The immutable Git revision used for the invocation.
     revision: String,
+    /// The executable built from `revision`.
     executable: PathBuf,
 }
 
-/// Resolves the latest main revision, builds it once in the user cache, and runs it.
+/// Resolves the latest main revision, builds it once in the user cache, and
+/// runs it.
 ///
-/// When `tool` is `rs-infra-ci`, all supported task tools are prepared and exposed
-/// through `RS_INFRA_BIN_DIR` so the CI orchestrator uses the same revision snapshot.
-/// Network lookup and Git/Cargo dependency fetches are retried with bounded backoff.
+/// When `tool` is `rs-infra-ci`, all supported task tools are prepared and
+/// exposed through `RS_INFRA_BIN_DIR` so the CI orchestrator uses the same
+/// revision snapshot. Network lookup and Git/Cargo dependency fetches are
+/// retried with bounded backoff.
+///
+/// # Parameters
+///
+/// - `project`: project directory used as the child process working directory.
+/// - `tool`: supported infrastructure tool name.
+/// - `args`: arguments forwarded to the selected executable.
+///
+/// # Returns
+///
+/// The child process exit code, or `1` when it exits without a numeric code.
+///
+/// # Errors
+///
+/// Returns an error if tool resolution, cache preparation, or process startup
+/// fails.
 pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
     let selected = find_tool(tool)?;
     let mut names = vec![selected.name];
     if selected.name == "rs-infra-ci" {
-        names.extend(
-            TOOLS
-                .iter()
-                .map(|item| item.name)
-                .filter(|name| *name != selected.name),
-        );
+        names.extend(TOOLS.iter().map(|item| item.name).filter(|name| *name != selected.name));
     }
 
     let cache = cache_root()?.join("rs-infra");
@@ -102,10 +117,9 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
             .join(&revision)
             .join(&host)
             .join(&rustc_release);
-        let lock_path = cache.join("locks").join(format!(
-            "{}-{revision}-{host}-{rustc_release}.lock",
-            selected.name
-        ));
+        let lock_path = cache
+            .join("locks")
+            .join(format!("{}-{revision}-{host}-{rustc_release}.lock", selected.name));
         let _lock = CacheLock::acquire(&lock_path)?;
         let source_dir = cache.join("sources").join(selected.name).join(&revision);
         let executable = ensure_built(selected, &revision, &source_dir, &tool_cache)?;
@@ -142,6 +156,20 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
 }
 
 /// Resolves and builds every supported tool without changing the project tree.
+///
+/// # Parameters
+///
+/// - `_project`: retained for compatibility; the cache operation does not use
+///   the project path.
+///
+/// # Returns
+///
+/// `Ok(())` after all supported tools are available in the cache.
+///
+/// # Errors
+///
+/// Returns an error if revision lookup, cache preparation, or tool building
+/// fails.
 pub fn prewarm(_project: &Path) -> Result<()> {
     let cache = cache_root()?.join("rs-infra");
     let host = host_target()?;
@@ -156,10 +184,9 @@ pub fn prewarm(_project: &Path) -> Result<()> {
             .join(&revision)
             .join(&host)
             .join(&rustc_release);
-        let lock_path = cache.join("locks").join(format!(
-            "{}-{revision}-{host}-{rustc_release}.lock",
-            tool.name
-        ));
+        let lock_path = cache
+            .join("locks")
+            .join(format!("{}-{revision}-{host}-{rustc_release}.lock", tool.name));
         let _lock = CacheLock::acquire(&lock_path)?;
         let source_dir = cache.join("sources").join(tool.name).join(&revision);
         let executable = ensure_built(*tool, &revision, &source_dir, &tool_cache)?;
@@ -173,6 +200,8 @@ pub fn prewarm(_project: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Locates the shared checkout or fetches the manager source into the tool
+/// cache.
 fn manager_source(cache: &Path) -> Result<PathBuf> {
     if let Some(source) = env::var_os("RS_INFRA_SHARED_ROOT") {
         let source = PathBuf::from(source);
@@ -183,14 +212,13 @@ fn manager_source(cache: &Path) -> Result<PathBuf> {
     }
     let revision = resolve_main(MANAGER)?;
     let source = cache.join("sources").join(MANAGER.name).join(&revision);
-    let lock_path = cache
-        .join("locks")
-        .join(format!("manager-source-{revision}.lock"));
+    let lock_path = cache.join("locks").join(format!("manager-source-{revision}.lock"));
     let _lock = CacheLock::acquire(&lock_path)?;
     checkout_source(MANAGER, &revision, &source)?;
     Ok(source)
 }
 
+/// Finds a supported tool by its executable name.
 fn find_tool(name: &str) -> Result<Tool> {
     TOOLS
         .iter()
@@ -199,6 +227,7 @@ fn find_tool(name: &str) -> Result<Tool> {
         .with_context(|| format!("unknown infrastructure tool '{name}'"))
 }
 
+/// Resolves and validates the current `main` commit for a tool repository.
 fn resolve_main(tool: Tool) -> Result<String> {
     let source = tool.source();
     let output = retry("resolve main revision", || {
@@ -214,27 +243,20 @@ fn resolve_main(tool: Tool) -> Result<String> {
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
-    let text =
-        String::from_utf8(output.stdout).context("git ls-remote returned non-UTF-8 output")?;
+    let text = String::from_utf8(output.stdout).context("git ls-remote returned non-UTF-8 output")?;
     let revision = text
         .split_whitespace()
         .next()
         .context("main branch returned no revision")?;
     if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        bail!(
-            "{} main returned an invalid Git SHA '{revision}'",
-            tool.name
-        );
+        bail!("{} main returned an invalid Git SHA '{revision}'", tool.name);
     }
     Ok(revision.to_ascii_lowercase())
 }
 
-fn ensure_built(
-    tool: Tool,
-    revision: &str,
-    source_dir: &Path,
-    tool_cache: &Path,
-) -> Result<PathBuf> {
+/// Builds the requested tool revision and publishes its executable in the
+/// cache.
+fn ensure_built(tool: Tool, revision: &str, source_dir: &Path, tool_cache: &Path) -> Result<PathBuf> {
     let executable = tool_cache.join("bin").join(executable_file_name(tool.name));
     if executable.is_file() {
         return Ok(executable);
@@ -257,21 +279,9 @@ fn ensure_built(
     })?;
     let target_dir = tool_cache.join("target");
     let output = Command::new("cargo")
-        .args([
-            "build",
-            "--release",
-            "--locked",
-            "--offline",
-            "--manifest-path",
-        ])
+        .args(["build", "--release", "--locked", "--offline", "--manifest-path"])
         .arg(&manifest)
-        .args([
-            "--package",
-            tool.package,
-            "--bin",
-            tool.name,
-            "--target-dir",
-        ])
+        .args(["--package", tool.package, "--bin", tool.name, "--target-dir"])
         .arg(&target_dir)
         .current_dir(source_dir)
         .output()
@@ -284,23 +294,20 @@ fn ensure_built(
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let built = target_dir
-        .join("release")
-        .join(executable_file_name(tool.name));
+    let built = target_dir.join("release").join(executable_file_name(tool.name));
     if !built.is_file() {
         bail!("cargo build succeeded but {} is missing", built.display());
     }
-    let bin_dir = executable
-        .parent()
-        .context("tool executable has no parent")?;
+    let bin_dir = executable.parent().context("tool executable has no parent")?;
     fs::create_dir_all(bin_dir)?;
     let temporary = bin_dir.join(format!(".{}.tmp-{}", tool.name, std::process::id()));
     fs::copy(&built, &temporary).with_context(|| format!("failed to publish {}", tool.name))?;
-    fs::rename(&temporary, &executable)
-        .with_context(|| format!("failed to install {}", tool.name))?;
+    fs::rename(&temporary, &executable).with_context(|| format!("failed to install {}", tool.name))?;
     Ok(executable)
 }
 
+/// Checks out one immutable tool revision into its shared source-cache
+/// directory.
 fn checkout_source(tool: Tool, revision: &str, source_dir: &Path) -> Result<()> {
     let source = tool.source();
     if !source_dir.join(".git").exists() {
@@ -360,6 +367,8 @@ fn checkout_source(tool: Tool, revision: &str, source_dir: &Path) -> Result<()> 
     Ok(())
 }
 
+/// Retries a process operation with bounded exponential delay until it
+/// succeeds.
 fn retry<F>(description: &str, mut operation: F) -> Result<std::process::Output>
 where
     F: FnMut() -> Result<std::process::Output>,
@@ -384,15 +393,14 @@ where
                 String::from_utf8_lossy(&output.stderr).trim()
             );
         }
-        eprintln!(
-            "warning: {description} failed (attempt {attempt}/{attempts}); retrying in {delay}s"
-        );
+        eprintln!("warning: {description} failed (attempt {attempt}/{attempts}); retrying in {delay}s");
         thread::sleep(Duration::from_secs(delay));
         delay = delay.saturating_mul(2);
     }
     bail!("{description} failed without an attempt")
 }
 
+/// Creates or reuses a bin directory representing one resolved tool snapshot.
 fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     let mut manifest = String::new();
     for tool in tools {
@@ -418,9 +426,7 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     if invocation_dir.exists() {
         fs::remove_dir_all(&invocation_dir)?;
     }
-    let parent = invocation_dir
-        .parent()
-        .context("invocation path has no parent")?;
+    let parent = invocation_dir.parent().context("invocation path has no parent")?;
     fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(".tmp-{key}-{}", std::process::id()));
     if temporary.exists() {
@@ -428,9 +434,7 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     }
     fs::create_dir_all(temporary.join("bin"))?;
     for tool in tools {
-        let destination = temporary
-            .join("bin")
-            .join(executable_file_name(tool.tool.name));
+        let destination = temporary.join("bin").join(executable_file_name(tool.tool.name));
         if fs::hard_link(&tool.executable, &destination).is_err() {
             fs::copy(&tool.executable, &destination)?;
         }
@@ -440,10 +444,12 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
     Ok(bin_dir)
 }
 
+/// Adds the host executable suffix to a tool name.
 fn executable_file_name(name: &str) -> String {
     format!("{name}{}", env::consts::EXE_SUFFIX)
 }
 
+/// Selects the cache root from the supported environment variables.
 fn cache_root() -> Result<PathBuf> {
     env::var_os("RS_INFRA_CACHE_DIR")
         .map(PathBuf::from)
@@ -452,6 +458,7 @@ fn cache_root() -> Result<PathBuf> {
         .context("RS_INFRA_CACHE_DIR, XDG_CACHE_HOME, or HOME must be set")
 }
 
+/// Returns the host target reported by the active Rust compiler.
 fn host_target() -> Result<String> {
     let output = Command::new("rustc")
         .arg("-vV")
@@ -467,6 +474,8 @@ fn host_target() -> Result<String> {
         .context("rustc -vV did not report the host target")
 }
 
+/// Returns a filesystem-safe representation of the active Rust compiler
+/// version.
 fn rustc_release() -> Result<String> {
     let output = Command::new("rustc")
         .arg("--version")
@@ -480,6 +489,7 @@ fn rustc_release() -> Result<String> {
     Ok(version.replace('/', "-"))
 }
 
+/// Prepends the invocation bin directory to the current process search path.
 fn prepend_path(path: &Path) -> std::ffi::OsString {
     let mut paths = vec![path.to_path_buf()];
     if let Some(existing) = env::var_os("PATH") {
@@ -489,10 +499,12 @@ fn prepend_path(path: &Path) -> std::ffi::OsString {
 }
 
 struct CacheLock {
+    /// Open file whose exclusive lock protects the associated cache entry.
     file: File,
 }
 
 impl CacheLock {
+    /// Acquires an exclusive lock, creating its parent directory when needed.
     fn acquire(path: &Path) -> Result<Self> {
         fs::create_dir_all(path.parent().context("lock path has no parent")?)?;
         let file = OpenOptions::new()
