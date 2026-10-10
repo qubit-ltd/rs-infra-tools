@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 
@@ -30,6 +30,10 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
             manifest["config_sources"],
         )
         self.assertIn(".infra/ci/defaults.toml", manifest["retired_targets"])
+        self.assertTrue(all(
+            source.get("local") == "manager" or source["repository"].startswith("git@github.com:")
+            for source in manifest["config_sources"]
+        ))
         with mock.patch.object(sync.subprocess, "run", side_effect=AssertionError("unexpected clone")):
             entries, versions = sync.config_entries(
                 {"files": [], "config_sources": [
@@ -195,6 +199,49 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
 
         self.assertEqual(first, same)
         self.assertNotEqual(first, changed)
+
+    def test_external_config_clone_retries_transient_failure(self) -> None:
+        source = Path(self.temp.name) / "source-repo/conf"
+        source.mkdir(parents=True)
+        (source / "manifest.json").write_text(json.dumps({"version": 1, "files": [
+            {"source": "config.toml", "target": "config.toml"}
+        ]}))
+        (source / "config.toml").write_text("value = 1\n")
+        manifest = sync.load_manifest(self.package)
+        manifest["config_sources"] = [
+            {"name": "rs-infra-ci", "directory": "ci", "repository": "git@github.com:qubit-ltd/rs-infra-ci.git"}
+        ]
+        calls = 0
+
+        def clone(command: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                Path(command[-1]).mkdir(parents=True)
+                (Path(command[-1]) / "partial-clone").write_text("incomplete\n")
+                raise subprocess.CalledProcessError(128, command)
+            shutil.copytree(source, Path(command[-1]) / "conf")
+            return subprocess.CompletedProcess(command, 0)
+
+        with mock.patch.object(sync.subprocess, "run", side_effect=clone), mock.patch("time.sleep") as pause:
+            with redirect_stderr(io.StringIO()):
+                entries, _ = sync.config_entries(manifest, Path(self.temp.name) / "checkouts")
+        self.assertEqual(calls, 2)
+        pause.assert_called_once()
+        self.assertEqual(entries[0][0]["target"], ".infra/ci/config.toml")
+
+    def test_external_config_clone_stops_after_bounded_attempts(self) -> None:
+        manifest = sync.load_manifest(self.package)
+        manifest["config_sources"] = [
+            {"name": "rs-infra-ci", "directory": "ci", "repository": "git@github.com:qubit-ltd/rs-infra-ci.git"}
+        ]
+        with mock.patch.object(sync.subprocess, "run", side_effect=subprocess.CalledProcessError(128, ["git", "clone"])) as clone:
+            with mock.patch("time.sleep") as pause:
+                with redirect_stderr(io.StringIO()):
+                    with self.assertRaises(subprocess.CalledProcessError):
+                        sync.config_entries(manifest, Path(self.temp.name) / "checkouts")
+        self.assertEqual(clone.call_count, 4)
+        self.assertEqual(pause.call_count, 3)
 
     def write_manager_config(self) -> Path:
         manifest = json.loads((self.package / "manifest.json").read_text())

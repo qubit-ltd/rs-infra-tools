@@ -14,6 +14,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 
 SNAPSHOT = Path(".infra/bootstrap-source.json")
@@ -117,11 +118,20 @@ def config_entries(manifest: dict, checkout_root: Path, package_root: Path | Non
                 raise ValueError("manager config source requires package root")
             checkout = package_root.parent.parent
         else:
-            checkout = checkout_root / source["name"]
-            subprocess.run(
-                ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", "main", source["repository"], str(checkout)],
-                check=True,
-            )
+            for attempt in range(1, 5):
+                checkout = checkout_root / f"{source['name']}-{attempt}"
+                try:
+                    subprocess.run(
+                        ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", "main", source["repository"], str(checkout)],
+                        check=True,
+                    )
+                    break
+                except subprocess.CalledProcessError:
+                    if attempt == 4:
+                        raise
+                    delay = 2**attempt
+                    print(f"warning: clone {source['name']} failed (attempt {attempt}/4); retrying in {delay}s", file=sys.stderr)
+                    time.sleep(delay)
         conf = checkout / "conf"
         config_manifest_path = safe_path(conf, "manifest.json")
         if not config_manifest_path.is_file() or config_manifest_path.is_symlink():
