@@ -20,14 +20,14 @@ else
 fi
 cache_root="$cache_home/rs-infra"
 mkdir -p "$cache_root/sources" "$cache_root/tools" "$cache_root/locks" "$cache_root/build/manager"
-manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git
+manager_repo=git@github.com:qubit-ltd/rs-infra-tools.git
 
 if [[ -n "${RS_INFRA_SHARED_ROOT:-}" && -x "${RS_INFRA_TOOLS_BIN:-}" ]]; then
     shared_root=$RS_INFRA_SHARED_ROOT
     manager_bin=$RS_INFRA_TOOLS_BIN
 else
     infra_retry() {
-        local description="$1" attempt=1 max_attempts="${RS_INFRA_NETWORK_MAX_ATTEMPTS:-4}" delay="${RS_INFRA_NETWORK_RETRY_DELAY_SECONDS:-2}" status=0
+        local description="$1" attempt=1 max_attempts="${RS_INFRA_NETWORK_MAX_ATTEMPTS:-6}" delay="${RS_INFRA_NETWORK_RETRY_DELAY_SECONDS:-2}" status=0
         shift
         [[ "$max_attempts" =~ ^[0-9]+$ ]] && (( max_attempts > 0 )) || { echo "error: invalid retry count" >&2; return 2; }
         [[ "$delay" =~ ^[0-9]+$ ]] || { echo "error: invalid retry delay" >&2; return 2; }
