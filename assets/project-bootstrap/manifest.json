@@ -2,6 +2,11 @@
   "version": 1,
   "config_sources": [
     {
+      "name": "rs-infra-tools",
+      "directory": "tools",
+      "local": "manager"
+    },
+    {
       "name": "rs-infra-ci",
       "directory": "ci",
       "repository": "https://github.com/qubit-ltd/rs-infra-ci.git"
@@ -16,6 +21,9 @@
       "directory": "dependency",
       "repository": "https://github.com/qubit-ltd/rs-infra-dependency.git"
     }
+  ],
+  "retired_targets": [
+    ".infra/ci/defaults.toml"
   ],
   "files": [
     {

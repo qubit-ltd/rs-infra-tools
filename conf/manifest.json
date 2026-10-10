@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "source": "defaults.toml",
+      "target": "defaults.toml"
+    }
+  ]
+}

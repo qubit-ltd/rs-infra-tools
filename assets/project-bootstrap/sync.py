@@ -77,8 +77,13 @@ def load_manifest(package: Path) -> dict:
         if not isinstance(source, dict):
             raise ValueError("invalid config source")
         name, directory, repository = (source.get(key) for key in ("name", "directory", "repository"))
-        if not all(isinstance(value, str) and value for value in (name, directory, repository)):
-            raise ValueError("config source name, directory and repository must be nonempty strings")
+        local = source.get("local")
+        if not all(isinstance(value, str) and value for value in (name, directory)):
+            raise ValueError("config source name and directory must be nonempty strings")
+        if (isinstance(repository, str) and bool(repository)) == (local == "manager"):
+            raise ValueError(f"config source {name} must specify repository or local manager")
+        if local is not None and local != "manager":
+            raise ValueError(f"invalid local config source: {local!r}")
         if name in names or directory in directories:
             raise ValueError(f"duplicate config source: {name}")
         if "/" in name or "\\" in name or name in {".", ".."}:
@@ -87,22 +92,36 @@ def load_manifest(package: Path) -> dict:
             raise ValueError(f"invalid config directory: {directory}")
         names.add(name)
         directories.add(directory)
+    retired = manifest.get("retired_targets", [])
+    if not isinstance(retired, list) or any(not isinstance(target, str) for target in retired):
+        raise ValueError("retired_targets must be an array of paths")
+    if len(retired) != len(set(retired)):
+        raise ValueError("duplicate retired target")
+    for target in retired:
+        safe_path(Path("/project-root"), target)
+        if target == SNAPSHOT.as_posix():
+            raise ValueError("cannot retire bootstrap snapshot")
     return manifest
 
 
-def config_entries(manifest: dict, checkout_root: Path) -> tuple[list[tuple[dict, Path]], dict[str, str]]:
-    """Fetch each owner's main branch and resolve its declared conf files."""
+def config_entries(manifest: dict, checkout_root: Path, package_root: Path | None = None) -> tuple[list[tuple[dict, Path]], dict[str, str]]:
+    """Resolve each owner's declared conf files, fetching external sources."""
     entries: list[tuple[dict, Path]] = []
     versions: dict[str, str] = {}
     targets = {entry["target"] for entry in manifest["files"]}
     for profile_entries in manifest.get("profiles", {}).values():
         targets.update(entry["target"] for entry in profile_entries)
     for source in manifest.get("config_sources", []):
-        checkout = checkout_root / source["name"]
-        subprocess.run(
-            ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", "main", source["repository"], str(checkout)],
-            check=True,
-        )
+        if source.get("local") == "manager":
+            if package_root is None:
+                raise ValueError("manager config source requires package root")
+            checkout = package_root.parent.parent
+        else:
+            checkout = checkout_root / source["name"]
+            subprocess.run(
+                ["git", "clone", "--quiet", "--depth", "1", "--single-branch", "--branch", "main", source["repository"], str(checkout)],
+                check=True,
+            )
         conf = checkout / "conf"
         config_manifest_path = safe_path(conf, "manifest.json")
         if not config_manifest_path.is_file() or config_manifest_path.is_symlink():
@@ -223,6 +242,28 @@ def obsolete_baselines(project: Path, snapshot: dict, current_targets: set[str])
     return obsolete
 
 
+def retired_config_paths(project: Path, manifest: dict, snapshot: dict, current_targets: set[str]) -> list[Path]:
+    """Retire only targets still matching their previous managed snapshot."""
+    obsolete = []
+    recorded = snapshot.get("files", {})
+    for target in manifest.get("retired_targets", []):
+        if target in current_targets:
+            continue
+        path = safe_path(project, target)
+        record = recorded.get(target)
+        if record is None:
+            if path.exists():
+                raise ValueError(f"retired config is not recorded in snapshot: {target}")
+            continue
+        if not path.is_file() or digest(path.read_bytes()) != record.get("sha256"):
+            raise ValueError(f"retired config was modified or is missing: {target}")
+        mode = bool(path.stat().st_mode & stat.S_IXUSR)
+        if not executable_mode_matches(mode, record.get("executable")):
+            raise ValueError(f"retired config mode was modified: {target}")
+        obsolete.append(path)
+    return obsolete
+
+
 def revision(package: Path) -> str:
     value = os.environ.get("RS_INFRA_SOURCE_REVISION")
     if value:
@@ -275,7 +316,7 @@ def main() -> int:
             entries = [] if args.configs_only else selected_entries(manifest, project)
             package_digest = package_state(package, manifest)
             with tempfile.TemporaryDirectory(prefix="rs-infra-config-") as checkout_directory:
-                external, config_versions = config_entries(manifest, Path(checkout_directory))
+                external, config_versions = config_entries(manifest, Path(checkout_directory), package)
                 planned_sources = [(entry, safe_path(package, entry["source"])) for entry in entries] + external
                 package_files = {entry["target"]: {"sha256": digest(source.read_bytes()), "executable": entry["executable"]} for entry, source in planned_sources}
                 old_snapshot, drift = project_state(project)
@@ -291,7 +332,9 @@ def main() -> int:
                         print("locally modified or missing: " + ", ".join(drift))
                     return 1
 
-                obsolete = obsolete_baselines(project, old_snapshot, set(package_files))
+                current_targets = set(package_files)
+                obsolete = obsolete_baselines(project, old_snapshot, current_targets)
+                obsolete.extend(retired_config_paths(project, manifest, old_snapshot, current_targets))
                 planned: list[tuple[dict, Path, bytes]] = []
                 for entry, source in planned_sources:
                     target = safe_path(project, entry["target"])

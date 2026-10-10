@@ -23,13 +23,29 @@ SPEC.loader.exec_module(sync)
 
 
 class ProjectBootstrapSyncTests(unittest.TestCase):
+    def test_repository_manifest_installs_manager_defaults_and_declares_retirement(self) -> None:
+        manifest = sync.load_manifest(PACKAGE)
+        self.assertIn(
+            {"name": "rs-infra-tools", "directory": "tools", "local": "manager"},
+            manifest["config_sources"],
+        )
+        self.assertIn(".infra/ci/defaults.toml", manifest["retired_targets"])
+        with mock.patch.object(sync.subprocess, "run", side_effect=AssertionError("unexpected clone")):
+            entries, versions = sync.config_entries(
+                {"files": [], "config_sources": [
+                    {"name": "rs-infra-tools", "directory": "tools", "local": "manager"}
+                ]}, Path(tempfile.gettempdir()) / "unused-checkouts", PACKAGE
+            )
+        self.assertEqual(entries[0][0]["target"], ".infra/tools/defaults.toml")
+        self.assertIn("rs-infra-tools", versions)
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.project = Path(self.temp.name) / "project"
         self.project.mkdir()
-        self.package = Path(self.temp.name) / "package"
-        self.package.mkdir()
+        self.package = Path(self.temp.name) / "manager/assets/project-bootstrap"
+        self.package.mkdir(parents=True)
         (self.package / "manifest.json").write_text(json.dumps({"version": 1, "files": [
             {"source": "source/tool.sh", "target": ".infra/tool.sh", "executable": True}
         ]}))
@@ -179,6 +195,134 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
 
         self.assertEqual(first, same)
         self.assertNotEqual(first, changed)
+
+    def write_manager_config(self) -> Path:
+        manifest = json.loads((self.package / "manifest.json").read_text())
+        manifest["config_sources"] = [
+            {"name": "rs-infra-tools", "directory": "tools", "local": "manager"}
+        ]
+        (self.package / "manifest.json").write_text(json.dumps(manifest))
+        conf = self.package.parent.parent / "conf"
+        conf.mkdir()
+        (conf / "manifest.json").write_text(json.dumps({"version": 1, "files": [
+            {"source": "defaults.toml", "target": "defaults.toml"}
+        ]}))
+        defaults = conf / "defaults.toml"
+        defaults.write_text('build_toolchain = "1.94.0"\n')
+        return defaults
+
+    def test_manager_config_uses_package_checkout_without_cloning(self) -> None:
+        defaults = self.write_manager_config()
+        manifest = sync.load_manifest(self.package)
+        with mock.patch.object(sync.subprocess, "run", side_effect=AssertionError("unexpected clone")):
+            entries, first_versions = sync.config_entries(
+                manifest, Path(self.temp.name) / "checkout-1", self.package
+            )
+            defaults.write_text('build_toolchain = "1.95.0"\n')
+            _, second_versions = sync.config_entries(
+                manifest, Path(self.temp.name) / "checkout-2", self.package
+            )
+        self.assertEqual(entries[0][0]["target"], ".infra/tools/defaults.toml")
+        self.assertNotEqual(first_versions, second_versions)
+
+    def test_manager_config_install_tracks_contents_and_does_not_rewrite_unchanged_file(self) -> None:
+        defaults = self.write_manager_config()
+        first = self.run_sync("--yes")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        target = self.project / ".infra/tools/defaults.toml"
+        self.assertEqual(target.read_bytes(), defaults.read_bytes())
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertIn("rs-infra-tools", snapshot["config_sources"])
+        first_version = snapshot["config_sources"]["rs-infra-tools"]
+        first_inode = target.stat().st_ino
+        same = self.run_sync("--yes")
+        self.assertEqual(same.returncode, 0, same.stderr)
+        self.assertEqual(target.stat().st_ino, first_inode)
+        defaults.write_text('build_toolchain = "1.95.0"\n')
+        changed = self.run_sync("--yes")
+        self.assertEqual(changed.returncode, 0, changed.stderr)
+        later, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotEqual(later["config_sources"]["rs-infra-tools"], first_version)
+        self.assertEqual(target.read_bytes(), defaults.read_bytes())
+
+    def install_old_defaults(self) -> Path:
+        old = self.project / ".infra/ci/defaults.toml"
+        old.parent.mkdir(parents=True)
+        old.write_text('build_toolchain = "1.94.0"\n')
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot_path = self.project / ".infra/bootstrap-source.json"
+        snapshot = json.loads(snapshot_path.read_text())
+        snapshot["files"][".infra/ci/defaults.toml"] = {
+            "sha256": sync.digest(old.read_bytes()), "executable": False
+        }
+        snapshot_path.write_text(json.dumps(snapshot))
+        return old
+
+    def enable_defaults_retirement(self) -> None:
+        manifest_path = self.package / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["retired_targets"] = [".infra/ci/defaults.toml"]
+        manifest_path.write_text(json.dumps(manifest))
+
+    def test_retirement_removes_snapshot_owned_old_defaults(self) -> None:
+        old = self.install_old_defaults()
+        self.write_manager_config()
+        self.enable_defaults_retirement()
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(old.exists())
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(".infra/ci/defaults.toml", snapshot["files"])
+        self.assertTrue((self.project / ".infra/tools/defaults.toml").exists())
+
+    def test_retirement_allows_fresh_project_without_old_defaults(self) -> None:
+        self.write_manager_config()
+        self.enable_defaults_retirement()
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.project / ".infra/tools/defaults.toml").exists())
+
+    def test_retirement_rejects_modified_old_defaults_before_other_writes(self) -> None:
+        old = self.install_old_defaults()
+        old.write_text("local changes\n")
+        self.write_manager_config()
+        self.enable_defaults_retirement()
+        original_tool = (self.project / ".infra/tool.sh").read_bytes()
+        (self.package / "source/tool.sh").write_text("new upstream tool\n")
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(".infra/ci/defaults.toml", result.stderr)
+        self.assertEqual(old.read_text(), "local changes\n")
+        self.assertEqual((self.project / ".infra/tool.sh").read_bytes(), original_tool)
+        self.assertFalse((self.project / ".infra/tools/defaults.toml").exists())
+
+    def test_retirement_rejects_missing_snapshot_owned_old_defaults(self) -> None:
+        old = self.install_old_defaults()
+        old.unlink()
+        self.write_manager_config()
+        self.enable_defaults_retirement()
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(".infra/ci/defaults.toml", result.stderr)
+        self.assertFalse((self.project / ".infra/tools/defaults.toml").exists())
+
+    def test_retirement_rejects_untracked_old_defaults(self) -> None:
+        old = self.install_old_defaults()
+        snapshot_path = self.project / ".infra/bootstrap-source.json"
+        snapshot = json.loads(snapshot_path.read_text())
+        del snapshot["files"][".infra/ci/defaults.toml"]
+        snapshot_path.write_text(json.dumps(snapshot))
+        self.write_manager_config()
+        self.enable_defaults_retirement()
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(".infra/ci/defaults.toml", result.stderr)
+        self.assertTrue(old.exists())
+        self.assertFalse((self.project / ".infra/tools/defaults.toml").exists())
 
 
 if __name__ == "__main__":
