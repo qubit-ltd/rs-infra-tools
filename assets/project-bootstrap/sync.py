@@ -379,7 +379,7 @@ def main() -> int:
                 source_revision = revision(package)
                 installed_revision = old_snapshot.get("source_revision", "unknown") if args.configs_only else source_revision
                 installed_digest = old_snapshot.get("package_sha256") if args.configs_only else package_digest
-                snapshot = {"schema": 1, "source_repository": "git@github.com:qubit-ltd/rs-infra-tools.git", "source_revision": installed_revision, "package_sha256": installed_digest, "config_sources": config_versions, "files": package_files}
+                snapshot = {"schema": 1, "source_repository": "https://github.com/qubit-ltd/rs-infra-tools.git", "source_revision": installed_revision, "package_sha256": installed_digest, "config_sources": config_versions, "files": package_files}
                 snapshot_data = json.dumps(snapshot, indent=2, sort_keys=True) + "\n"
                 snap_path = safe_path(project, SNAPSHOT.as_posix())
                 if snap_path.exists() and not snap_path.is_file():

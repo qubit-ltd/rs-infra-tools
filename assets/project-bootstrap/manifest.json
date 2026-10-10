@@ -9,17 +9,17 @@
     {
       "name": "rs-infra-ci",
       "directory": "ci",
-      "repository": "git@github.com:qubit-ltd/rs-infra-ci.git"
+      "repository": "https://github.com/qubit-ltd/rs-infra-ci.git"
     },
     {
       "name": "rs-infra-style",
       "directory": "style",
-      "repository": "git@github.com:qubit-ltd/rs-infra-style.git"
+      "repository": "https://github.com/qubit-ltd/rs-infra-style.git"
     },
     {
       "name": "rs-infra-dependency",
       "directory": "dependency",
-      "repository": "git@github.com:qubit-ltd/rs-infra-dependency.git"
+      "repository": "https://github.com/qubit-ltd/rs-infra-dependency.git"
     }
   ],
   "retired_targets": [
