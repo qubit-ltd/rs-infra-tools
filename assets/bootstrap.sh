@@ -80,4 +80,11 @@ export RS_INFRA_PROJECT_ROOT="$project_root"
 export RS_INFRA_SHARED_ROOT="$shared_root"
 export RS_INFRA_TOOLS_BIN="$manager_bin"
 export RS_INFRA_CACHE_DIR="$cache_home"
+if [[ "$entrypoint" == .infra/bin/align-ci.sh ]]; then
+    prepare_dependencies="$shared_root/.infra/lib/prepare-local-path-dependencies.sh"
+    if [[ -x "$prepare_dependencies" ]]; then
+        "$prepare_dependencies"
+    fi
+    exec "$manager_bin" latest --project "$project_root" --tool rs-infra-style -- fix "$@"
+fi
 exec "$shared_root/$entrypoint" "$@"
