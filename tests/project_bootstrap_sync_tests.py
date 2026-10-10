@@ -408,6 +408,46 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertFalse(drift)
         self.assertNotIn(".infra/dependency/policy/baselines/old.txt", later["files"])
 
+    def test_configs_only_preserves_package_version_for_status(self) -> None:
+        self.write_manager_config()
+        with mock.patch.dict(sync.os.environ, {"RS_INFRA_SOURCE_REVISION": "old-revision"}):
+            first = self.run_sync("--yes")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        old_snapshot, _ = sync.project_state(self.project)
+        old_tool_record = old_snapshot["files"][".infra/tool.sh"]
+        (self.package / "source/tool.sh").write_text("#!/bin/sh\necho newer upstream\n")
+        (self.package.parent.parent / "conf/defaults.toml").write_text('build_toolchain = "1.95.0"\n')
+        with mock.patch.dict(sync.os.environ, {"RS_INFRA_SOURCE_REVISION": "new-revision"}):
+            updated = self.run_sync("--configs-only", "--yes")
+            status = self.run_sync("--status")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertEqual(snapshot["files"][".infra/tool.sh"], old_tool_record)
+        self.assertEqual(snapshot["package_sha256"], old_snapshot["package_sha256"])
+        self.assertEqual(snapshot["source_revision"], "old-revision")
+        self.assertNotEqual(snapshot["config_sources"], old_snapshot["config_sources"])
+        self.assertEqual(status.returncode, 1, status.stdout + status.stderr)
+        self.assertIn("bootstrap package differs", status.stdout)
+        self.assertNotIn("shared config contents differ", status.stdout)
+
+    def test_fresh_configs_only_does_not_mark_package_as_installed(self) -> None:
+        self.write_manager_config()
+        installed = self.run_sync("--configs-only", "--yes")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(".infra/tool.sh", snapshot["files"])
+        status = self.run_sync("--status")
+        self.assertEqual(status.returncode, 1, status.stdout + status.stderr)
+        self.assertIn("bootstrap package differs", status.stdout)
+
+    def test_snapshot_records_ssh_manager_repository(self) -> None:
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot, _ = sync.project_state(self.project)
+        self.assertEqual(snapshot["source_repository"], "git@github.com:qubit-ltd/rs-infra-tools.git")
+
 
 if __name__ == "__main__":
     unittest.main()
