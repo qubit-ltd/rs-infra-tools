@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import json
 from pathlib import Path
 import shutil
@@ -8,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 
@@ -116,9 +118,18 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
     def test_repeated_sync_is_idempotent(self) -> None:
         first = self.run_sync("--yes")
         snapshot = (self.project / ".infra/bootstrap-source.json").read_bytes()
-        second = self.run_sync("--yes")
         self.assertEqual(first.returncode, 0, first.stderr)
-        self.assertEqual(second.returncode, 0, second.stderr)
+        output = io.StringIO()
+        argv = [
+            "sync.py", "--project-root", str(self.project),
+            "--package-root", str(self.package), "--yes",
+        ]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(sync.os, "replace", wraps=sync.os.replace) as replace_file:
+            with redirect_stdout(output):
+                second = sync.main()
+        self.assertEqual(second, 0)
+        self.assertEqual(replace_file.call_count, 0)
+        self.assertIn("already up to date", output.getvalue())
         self.assertEqual((self.project / ".infra/bootstrap-source.json").read_bytes(), snapshot)
 
     def test_snapshot_check_accepts_git_for_windows_crlf_checkout(self) -> None:
