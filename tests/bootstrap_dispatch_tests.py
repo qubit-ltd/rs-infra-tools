@@ -63,10 +63,24 @@ class BootstrapDispatchTests(unittest.TestCase):
                 )
                 helper.chmod(0o755)
 
+            (shared_lib / "cleanup-build-artifacts.sh").write_text(
+                "cleanup_build_artifacts() {\n"
+                "  local task_status=$?\n"
+                "  rm -f -- \"$project_root/target/ci-artifact\"\n"
+                "  printf 'cleanup:%s\\n' \"$task_status\" >> \"$CALL_LOG\"\n"
+                "  return \"$task_status\"\n"
+                "}\n"
+                "if [ -z \"${RS_INFRA_CLEANUP_OWNER_PID:-}\" ]; then\n"
+                "  export RS_INFRA_CLEANUP_OWNER_PID=$$\n"
+                "  trap cleanup_build_artifacts EXIT\n"
+                "fi\n"
+            )
+
             manager.write_text(
                 "#!/usr/bin/env bash\n"
                 "set -euo pipefail\n"
                 'printf \'%s\\n\' "$@" >> "$CALL_LOG"\n'
+                'exit "${MANAGER_EXIT_STATUS:-0}"\n'
             )
             manager.chmod(0o755)
 
@@ -97,6 +111,9 @@ class BootstrapDispatchTests(unittest.TestCase):
             }
             for entrypoint, expected in cases.items():
                 call_log.unlink(missing_ok=True)
+                if entrypoint == "ci-check":
+                    (project / "target").mkdir(parents=True, exist_ok=True)
+                    (project / "target/ci-artifact").touch()
                 result = subprocess.run(
                     ["bash", str(project_bootstrap), f".infra/bin/{entrypoint}.sh", "--dry-run"],
                     env=env,
@@ -110,7 +127,26 @@ class BootstrapDispatchTests(unittest.TestCase):
                     expected_log = ["prepare-local-path-dependencies", *expected]
                 if entrypoint == "coverage":
                     expected_log.append("coverage-report")
+                if entrypoint == "ci-check":
+                    expected_log.append("cleanup:0")
+                    self.assertFalse((project / "target/ci-artifact").exists())
                 self.assertEqual(call_log.read_text().splitlines(), expected_log, entrypoint)
+
+            call_log.unlink(missing_ok=True)
+            (project / "target").mkdir(parents=True, exist_ok=True)
+            failed_artifact = project / "target/ci-artifact"
+            failed_artifact.touch()
+            failed_env = env | {"MANAGER_EXIT_STATUS": "23"}
+            failed_result = subprocess.run(
+                ["bash", str(project_bootstrap), ".infra/bin/ci-check.sh"],
+                env=failed_env,
+                text=True,
+                capture_output=True,
+                timeout=3,
+            )
+            self.assertEqual(failed_result.returncode, 23, failed_result.stdout + failed_result.stderr)
+            self.assertFalse(failed_artifact.exists())
+            self.assertEqual(call_log.read_text().splitlines()[-1], "cleanup:23")
 
             call_log.unlink(missing_ok=True)
             result = subprocess.run(
