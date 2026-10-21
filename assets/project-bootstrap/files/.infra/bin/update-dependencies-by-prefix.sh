@@ -78,9 +78,9 @@ mapfile -t dependencies < <(
         | select(.manifest_path == $manifest)
         | .dependencies[]
         | select(.source == "registry+https://github.com/rust-lang/crates.io-index")
-        | select(.name as $name | any($prefixes[]; $name | startswith(.)))
-        | [.name, (.rename // ""), (.kind // "normal"), (.target // "")]
-        | @tsv
+        | select(.name as $name | any($prefixes[]; . as $prefix | $name | startswith($prefix)))
+        | {name, rename, kind: (.kind // "normal"), target}
+        | @json
     ' <<<"$metadata"
 )
 
@@ -90,7 +90,10 @@ if ((${#dependencies[@]} == 0)); then
 fi
 
 for dependency in "${dependencies[@]}"; do
-    IFS=$'\t' read -r name rename kind target <<<"$dependency"
+    name="$(jq -r '.name' <<<"$dependency")"
+    rename="$(jq -r '.rename // ""' <<<"$dependency")"
+    kind="$(jq -r '.kind' <<<"$dependency")"
+    target="$(jq -r '.target // ""' <<<"$dependency")"
     args=()
     case "$kind" in
         dev) args+=(--dev) ;;
