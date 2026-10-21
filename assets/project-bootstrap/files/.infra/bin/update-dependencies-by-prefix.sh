@@ -9,7 +9,7 @@ usage() {
     cat <<'EOF'
 用法：.infra/bin/update-dependencies-by-prefix.sh [--project <crate目录>] --prefix <前缀> [--prefix <前缀> ...]
 
-把当前 crate 中名称匹配任一前缀的 crates.io 直接依赖更新到最新稳定版本。
+把当前 crate 中名称匹配任一前缀的 crates.io 直接依赖更新到最新稳定版本对应的 `^major.minor` 要求，忽略 patch。
 保留 features、optional、default-features 等其他依赖设置；Git 和 path 依赖会跳过。
 
 选项：
@@ -110,8 +110,14 @@ for dependency in "${dependencies[@]}"; do
         printf '无法获取 %s 在 crates.io 上的最新稳定版本。\n' "$name" >&2
         exit 1
     }
-    printf '更新 %s%s 到 crates.io 最新稳定版本 %s\n' \
-        "$name" "${rename:+ (别名：$rename)}" "$latest_version"
+    if [[ "$latest_version" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+(\+[0-9A-Za-z.-]+)?$ ]]; then
+        requirement="^${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+    else
+        printf 'crates.io 返回了无法识别的稳定版本：%s %s\n' "$name" "$latest_version" >&2
+        exit 1
+    fi
+    printf '更新 %s%s：最新稳定版 %s，Cargo 要求 %s\n' \
+        "$name" "${rename:+ (别名：$rename)}" "$latest_version" "$requirement"
     [[ "$dry_run" -eq 0 ]] || args+=(--dry-run)
-    cargo add "${args[@]}" "${name}@${latest_version}" --manifest-path "$manifest"
+    cargo add "${args[@]}" "${name}@${requirement}" --manifest-path "$manifest"
 done
