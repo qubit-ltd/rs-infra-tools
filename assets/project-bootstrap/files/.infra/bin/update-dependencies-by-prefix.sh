@@ -7,7 +7,7 @@ dry_run=0
 
 usage() {
     cat <<'EOF'
-用法：.infra/bin/update-crates-by-prefix.sh [--project <crate目录>] --prefix <前缀> [--prefix <前缀> ...]
+用法：.infra/bin/update-dependencies-by-prefix.sh [--project <crate目录>] --prefix <前缀> [--prefix <前缀> ...]
 
 把当前 crate 中名称匹配任一前缀的 crates.io 直接依赖更新到最新稳定版本。
 保留 features、optional、default-features 等其他依赖设置；Git 和 path 依赖会跳过。
@@ -19,7 +19,7 @@ usage() {
   -h, --help        显示帮助
 
 示例：
-  .infra/bin/update-crates-by-prefix.sh --prefix qubit- --prefix rs-
+  .infra/bin/update-dependencies-by-prefix.sh --prefix qubit- --prefix rs-
 EOF
 }
 

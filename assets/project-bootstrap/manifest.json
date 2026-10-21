@@ -77,8 +77,8 @@
       "executable": true
     },
     {
-      "source": "files/.infra/bin/update-crates-by-prefix.sh",
-      "target": ".infra/bin/update-crates-by-prefix.sh",
+      "source": "files/.infra/bin/update-dependencies-by-prefix.sh",
+      "target": ".infra/bin/update-dependencies-by-prefix.sh",
       "executable": true
     },
     {
