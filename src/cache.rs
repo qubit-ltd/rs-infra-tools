@@ -192,7 +192,7 @@ fn digest(path: &Path) -> Result<String> {
         }
         hasher.update(&buffer[..count]);
     }
-    Ok(format!("{:x}", hasher.finalize()))
+    Ok(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// Adds executable permissions to a cached artifact on Unix.
@@ -260,6 +260,17 @@ mod tests {
     use super::digest;
     use super::ensure;
     use crate::lock::LockEntry;
+
+    #[test]
+    fn test_digest_encodes_sha256_as_lowercase_hex() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), b"abc").unwrap();
+
+        assert_eq!(
+            digest(source.path()).unwrap(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
 
     #[test]
     fn test_local_artifact_is_cached_and_reused() {

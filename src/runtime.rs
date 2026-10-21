@@ -409,7 +409,10 @@ fn invocation_bin_dir(cache: &Path, tools: &[ResolvedTool]) -> Result<PathBuf> {
         manifest.push_str(&tool.revision);
         manifest.push('\n');
     }
-    let key = format!("{:x}", Sha256::digest(manifest.as_bytes()));
+    let key: String = Sha256::digest(manifest.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     let invocation_dir = cache.join("invocations").join(&key);
     let bin_dir = invocation_dir.join("bin");
     let lock_path = cache.join("locks").join(format!("invocation-{key}.lock"));

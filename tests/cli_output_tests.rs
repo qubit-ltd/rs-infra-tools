@@ -15,7 +15,7 @@ const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 const TARGET: &str = "x86_64-unknown-linux-gnu";
 
 fn digest(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 #[test]
