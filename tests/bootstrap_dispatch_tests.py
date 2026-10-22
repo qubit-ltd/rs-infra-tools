@@ -13,6 +13,58 @@ BOOTSTRAP = REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh"
 
 
 class BootstrapDispatchTests(unittest.TestCase):
+    def test_alignment_runs_strict_clippy_and_propagates_failure(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bootstrap-align-clippy-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            shared = root / "shared"
+            project.mkdir()
+            shared.mkdir()
+            call_log = root / "calls"
+            manager = root / "manager"
+            manager.write_text(
+                "#!/bin/sh\n"
+                'printf "%s\\n" "$*" >> "$CALL_LOG"\n'
+                'case "$*" in\n'
+                '  *rs-infra-ci*) exit "${CLIPPY_STATUS:-0}" ;;\n'
+                '  *) exit "${STYLE_STATUS:-0}" ;;\n'
+                'esac\n'
+            )
+            manager.chmod(0o755)
+            env = os.environ | {
+                "RS_INFRA_PROJECT_ROOT": str(project),
+                "RS_INFRA_SHARED_ROOT": str(shared),
+                "RS_INFRA_TOOLS_BIN": str(manager),
+                "RS_INFRA_CACHE_DIR": str(root / "cache"),
+                "CALL_LOG": str(call_log),
+            }
+            scripts = (BOOTSTRAP, REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh")
+            for bootstrap in scripts:
+                for style_status, clippy_status, args in (
+                    (0, 0, []), (0, 23, []), (17, 0, []),
+                    (0, 23, ["--dry-run"]), (0, 23, ["--help"]),
+                ):
+                    with self.subTest(script=bootstrap, style=style_status, clippy=clippy_status, args=args):
+                        call_log.write_text("")
+                        result = subprocess.run(
+                            ["bash", str(bootstrap), ".infra/bin/align-ci.sh", *args],
+                            env=env | {"STYLE_STATUS": str(style_status), "CLIPPY_STATUS": str(clippy_status)},
+                            capture_output=True, text=True, timeout=3,
+                        )
+                        expected_status = style_status or (0 if args else clippy_status)
+                        self.assertEqual(result.returncode, expected_status, result.stderr)
+                        calls = call_log.read_text().splitlines()
+                        self.assertIn("rs-infra-style", calls[0])
+                        if style_status or args:
+                            self.assertEqual(len(calls), 1)
+                        else:
+                            self.assertEqual(len(calls), 2)
+                            self.assertEqual(
+                                calls[1],
+                                f"latest --project {project} --tool rs-infra-ci -- "
+                                f"--project {project} --only clippy check",
+                            )
+
     def test_entrypoints_dispatch_without_reentering_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory(prefix="bootstrap-dispatch-") as temp:
             root = Path(temp)
