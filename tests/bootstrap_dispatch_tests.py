@@ -157,7 +157,7 @@ class BootstrapDispatchTests(unittest.TestCase):
                 timeout=3,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(call_log.read_text().splitlines(), ["prepare-local-path-dependencies", "latest", "--project", str(project), "--tool", "rs-infra-dependency", "--", "--project", str(project), "check"])
+            self.assertEqual(call_log.read_text().splitlines(), ["prepare-local-path-dependencies", "latest", "--project", str(project), "--tool", "rs-infra-dependency", "--", "--project", str(project), "--recursive", "check"])
 
             call_log.unlink(missing_ok=True)
             result = subprocess.run(
@@ -172,8 +172,8 @@ class BootstrapDispatchTests(unittest.TestCase):
                 call_log.read_text().splitlines(),
                 [
                     "prepare-local-path-dependencies",
-                    "latest", "--project", str(project), "--tool", "rs-infra-dependency", "--", "--project", str(project), "sync",
-                    "latest", "--project", str(project), "--tool", "rs-infra-dependency", "--", "--project", str(project), "check",
+                    "latest", "--project", str(project), "--tool", "rs-infra-dependency", "--", "--project", str(project), "--recursive", "sync",
+                    "latest", "--project", str(project), "--tool", "rs-infra-dependency", "--", "--project", str(project), "--recursive", "check",
                 ],
             )
 

@@ -40,7 +40,7 @@ done
 [ -f "$policy_config" ] || die "dependency policy configuration was not found at '$policy_config'"
 
 run_policy() {
-    "$tool_runner" rs-infra-dependency --project "$project_root" "$@"
+    "$tool_runner" rs-infra-dependency --project "$project_root" --recursive "$@"
 }
 
 cd "$project_root"
