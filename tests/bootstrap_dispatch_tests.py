@@ -13,6 +13,53 @@ BOOTSTRAP = REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh"
 
 
 class BootstrapDispatchTests(unittest.TestCase):
+    def test_ci_check_builds_declared_node_test_worker_before_rust_ci(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bootstrap-ci-worker-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            bin_dir = root / "bin"
+            script_dir = project / ".infra/bin"
+            script_dir.mkdir(parents=True)
+            bin_dir.mkdir()
+            shutil.copyfile(REPO / "assets/project-bootstrap/files/.infra/bin/ci-check.sh", script_dir / "ci-check.sh")
+            (script_dir / "ci-check.sh").chmod(0o755)
+            (project / ".infra/bootstrap.sh").write_text(
+                "#!/usr/bin/env bash\n"
+                'printf "bootstrap:%s\\n" "$*" >> "$CALL_LOG"\n'
+            )
+            (project / ".infra/bootstrap.sh").chmod(0o755)
+            worker = project / "worker"
+            worker.mkdir()
+            (worker / "package.json").write_text(
+                '{"scripts":{"build:test-worker":"build fixture"}}\n'
+            )
+            calls = root / "calls"
+            for executable, label in (("node", "node"), ("corepack", "corepack")):
+                stub = bin_dir / executable
+                stub.write_text(
+                    "#!/usr/bin/env bash\n"
+                    f'printf "{label}:%s:%s\\n" "$PWD" "$*" >> "$CALL_LOG"\n'
+                )
+                stub.chmod(0o755)
+
+            result = subprocess.run(
+                ["bash", str(script_dir / "ci-check.sh"), "--dry-run"],
+                env=os.environ | {"PATH": f"{bin_dir}:{os.environ['PATH']}", "CALL_LOG": str(calls)},
+                capture_output=True,
+                text=True,
+                timeout=3,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                calls.read_text().splitlines(),
+                [
+                    f"corepack:{worker}:pnpm install --frozen-lockfile --ignore-scripts",
+                    f"corepack:{worker}:pnpm run build:test-worker",
+                    "bootstrap:.infra/bin/ci-check.sh --dry-run",
+                ],
+            )
+
     def test_alignment_runs_strict_clippy_and_propagates_failure(self) -> None:
         with tempfile.TemporaryDirectory(prefix="bootstrap-align-clippy-") as temp:
             root = Path(temp)
