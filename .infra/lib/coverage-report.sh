@@ -30,7 +30,7 @@ case "$coverage_scope" in
     package)
         mapfile -t package_names < <(jq -r \
             --arg manifest "$project_root/Cargo.toml" \
-            '.packages[] | select(.manifest_path == $manifest) | .name')
+            '.packages[] | select(.manifest_path == $manifest) | .name' <<<"$metadata")
         ;;
     default-members)
         mapfile -t package_names < <(jq -r \
