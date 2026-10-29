@@ -23,13 +23,13 @@ From a Rust project root:
 cargo run --manifest-path /path/to/rs-infra-tools/Cargo.toml -- --help
 ```
 
-Run the fixed bootstrap entry point from any migrated project:
+Run the stable root entry point from a Rust project:
 
 ```bash
 ./update-infra.sh
 ```
 
-The bootstrap checks `rs-infra-tools/main`, downloads and builds that revision when needed, then runs the upstream script directly from the shared cache. Regular project commands resolve the required tools on demand. Project repositories carry an upstream-managed root `update-infra.sh` for refreshing their stable bootstrap scripts and wrappers. Tool repositories use its config-only mode so their existing tool scripts are preserved. Run it manually when desired; it lists the files it will overwrite and asks once for confirmation. Pass `--yes` to skip the prompt. The updater fetches the `main` branch of each registered tool and installs its `conf/manifest.json` files into the matching project `.infra` directory. This includes shared CI tool versions, rustfmt settings, and the current dependency policy baseline; projects do not select baseline versions. `./update-infra.sh --check` verifies the installed snapshot, while `--status` compares it with the latest upstream package and shared configuration contents. CI should run `--check` before infrastructure commands. Project-specific CI tasks, Pages, and style exceptions remain under the project's `.infra` directory.
+The first run requires Git, Python 3.10 or later, Rust 1.94 or later, and Cargo. Git and Python fetch the manager's `main` branch and initialize `.infra`; Rust and Cargo then build the manager from source and prewarm its registered tools. Later default updates refresh managed files and shared configuration from their registered `main` branches, then prewarm the manager and all registered tool repositories at their latest `main` commits. When `.infra` already exists, the stable entry point delegates to its bootstrap to run this update flow. `--dry-run` lists planned changes and `--status` compares installed files with current upstream content; neither prewarms registered tools. `--check` verifies the local snapshot without fetching. `--yes` remains accepted for compatibility. If a managed file has local changes, the updater reports the conflicting paths and stops without overwriting them. Project-owned files outside the managed manifest remain untouched. In the `rs-infra-tools` repository itself, config-only mode keeps repository-specific bootstrap scripts intact. CI should run `--check` before infrastructure commands.
 
 The default shared cache is `${XDG_CACHE_HOME:-~/.cache}/qubit/rs-infra`. Set `RS_INFRA_CACHE_DIR` to choose another cache root. Cached sources and binaries are keyed by Git revision, host target, and Rust compiler version. Network operations retry four times by default with exponential delays; `RS_INFRA_NETWORK_MAX_ATTEMPTS` and `RS_INFRA_NETWORK_RETRY_DELAY_SECONDS` change the retry policy.
 
@@ -39,6 +39,25 @@ The command-line entry points are also available directly:
 rs-infra-tools latest --project . --tool rs-infra-style -- check
 rs-infra-tools prewarm --project .
 ```
+
+### Local platform checks
+
+The manager registers `rs-infra-platform` (Cargo package `qubit-infra-platform`) and distributes it from its GitHub source. In a migrated project, update the managed bootstrap before invoking the platform tool:
+
+```bash
+./update-infra.sh
+./.infra/bin/infra-tool.sh rs-infra-platform --project . check
+```
+
+The platform tool is not published on crates.io. For local source development, Rust 1.94 or later can also build and run a checkout directly:
+
+```bash
+cargo +1.94.0 run --manifest-path /path/to/rs-infra-platform/Cargo.toml --package qubit-infra-platform --bin rs-infra-platform -- --project . check
+```
+
+The tool reads project configuration from `.infra/platform/platform.toml` and host configuration from `~/.config/rs-infra/platform.toml`. The project owns its platform suites and target-platform lists; `update-infra.sh` preserves that file. Configure these before running `check`; it does not enable platform tasks in project CI automatically. Optional unavailable platforms warn and skip; `--require windows` requires actual Windows execution. Cleanup is enabled by default; `--no-cleanup` or `RS_INFRA_PLATFORM_CLEANUP=0` retains run files while owned environments still stop. The existing `rs-infra-verify` platform suite and its configuration retain their current meaning.
+
+Both `rs-infra-tools prewarm` and manager invocations of `rs-infra-ci` resolve every registered tool. The registered GitHub repositories must remain accessible. Once resolved, the platform executable is included in `RS_INFRA_BIN_DIR` alongside the other tools, with the `.exe` suffix on Windows. Existing revision-specific tool caches remain reusable.
 
 ## Capabilities and limitations
 
