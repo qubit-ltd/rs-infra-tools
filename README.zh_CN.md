@@ -60,7 +60,7 @@ cargo +1.94.0 run --manifest-path /path/to/rs-infra-platform/Cargo.toml --packag
 
 ## 延伸阅读
 
-可通过命令帮助和源码测试了解实际接口。切换到 [English README](README.md)。
+查看[引导与更新设计](docs/bootstrap-update-design.md)和命令帮助了解更新约定；源码测试覆盖具体行为。切换到 [English README](README.md)。
 
 ## 测试
 

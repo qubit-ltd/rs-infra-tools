@@ -65,7 +65,7 @@ The tool resolves exact `main` commits before using cached tools, compiles each 
 
 ## Learn More
 
-See the command help and source tests for the supported interface. Switch to [中文文档](README.zh_CN.md).
+See the [bootstrap update design](docs/bootstrap-update-design.md) and command help for the update contract. Source tests cover its behavior. Switch to [中文文档](README.zh_CN.md).
 
 ## Testing
 
