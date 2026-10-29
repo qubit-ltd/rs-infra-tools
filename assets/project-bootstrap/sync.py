@@ -226,6 +226,13 @@ def project_state(project: Path) -> tuple[dict, list[str]]:
     if not snap_path.is_file():
         return {}, [SNAPSHOT.as_posix()]
     snapshot = json.loads(snap_path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("schema") != 1
+        or not isinstance(snapshot.get("files"), dict)
+        or not isinstance(snapshot.get("config_sources", {}), dict)
+    ):
+        raise ValueError("invalid bootstrap snapshot")
     drift: list[str] = []
     recorded = snapshot.get("files", {})
     for target, expected in recorded.items():
@@ -237,6 +244,32 @@ def project_state(project: Path) -> tuple[dict, list[str]]:
         if digest(path.read_bytes()) != expected.get("sha256") or not executable_mode_matches(mode, expected.get("executable")):
             drift.append(target)
     return snapshot, drift
+
+
+def conflicting_targets(
+    project: Path,
+    snapshot: dict,
+    drift: list[str],
+    planned_sources: list[tuple[dict, Path]],
+) -> list[str]:
+    """Return managed drift and untracked paths that would be overwritten."""
+    recorded = snapshot.get("files", {})
+    planned_targets = {entry["target"] for entry, _ in planned_sources}
+    conflicts = set(drift) & planned_targets
+    if not snapshot:
+        conflicts.discard(SNAPSHOT.as_posix())
+    for entry, source in planned_sources:
+        target = safe_path(project, entry["target"])
+        if not target.is_file():
+            continue
+        record = recorded.get(entry["target"])
+        if record is None:
+            same_content = digest(target.read_bytes()) == digest(source.read_bytes())
+            mode = bool(target.stat().st_mode & stat.S_IXUSR)
+            same_mode = executable_mode_matches(mode, entry["executable"])
+            if not same_content or not same_mode:
+                conflicts.add(entry["target"])
+    return sorted(conflicts)
 
 
 def obsolete_baselines(project: Path, snapshot: dict, current_targets: set[str]) -> list[Path]:
@@ -306,7 +339,7 @@ def main() -> int:
     parser.add_argument("--package-root", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--configs-only", action="store_true", help="install shared config without replacing project bootstrap scripts")
     modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--yes", action="store_true", help="overwrite managed files without prompting")
+    modes.add_argument("--yes", action="store_true", help="accepted for compatibility; updates do not prompt")
     modes.add_argument("--dry-run", action="store_true", help="list targets without writing")
     modes.add_argument("--status", action="store_true", help="compare this package with the installed snapshot")
     modes.add_argument("--check", action="store_true", help="check the installed snapshot without fetching")
@@ -341,6 +374,13 @@ def main() -> int:
                     if drift:
                         print("locally modified or missing: " + ", ".join(drift))
                     return 1
+
+                conflicts = conflicting_targets(project, old_snapshot, drift, planned_sources)
+                if conflicts:
+                    print("error: managed file conflicts; resolve local changes before updating:", file=sys.stderr)
+                    for target in conflicts:
+                        print(f"  {target}", file=sys.stderr)
+                    return 2
 
                 if args.configs_only:
                     package_targets = {entry["target"] for entry in manifest["files"]}
@@ -403,15 +443,6 @@ def main() -> int:
                     print(f"  remove {path.relative_to(project)}")
                 if args.dry_run:
                     return 0
-                if not args.yes:
-                    if not sys.stdin.isatty():
-                        print("error: confirmation requires an interactive terminal; pass --yes to overwrite", file=sys.stderr)
-                        return 2
-                    answer = input("Overwrite these paths with the upstream versions? [y/N] ").strip().lower()
-                    if answer not in {"y", "yes"}:
-                        print("cancelled")
-                        return 1
-
                 for entry, target, data in planned:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     fd, temp_name = tempfile.mkstemp(prefix=".infra-update-", dir=target.parent)

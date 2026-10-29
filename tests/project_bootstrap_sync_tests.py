@@ -44,6 +44,11 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertIn("manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git", current_bootstrap)
         self.assertIn("repository=https://github.com/qubit-ltd/rs-infra-tools.git", repository_updater)
         self.assertIn("manager_repo=https://github.com/qubit-ltd/rs-infra-tools.git", manager_updater)
+        self.assertIn(
+            {"source": "files/.infra/bin/bootstrap-update.sh", "target": ".infra/bin/bootstrap-update.sh", "executable": True},
+            manifest["files"],
+        )
+        self.assertEqual(updater, repository_updater)
         with mock.patch.object(sync.subprocess, "run", side_effect=AssertionError("unexpected clone")):
             entries, versions = sync.config_entries(
                 {"files": [], "config_sources": [
@@ -72,30 +77,62 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
             "--package-root", str(self.package), *args,
         ], input=input_text, text=True, capture_output=True)
 
-    def test_noninteractive_requires_yes(self) -> None:
+    def test_default_update_is_noninteractive(self) -> None:
         result = self.run_sync()
-        self.assertEqual(result.returncode, 2, result.stderr)
-        self.assertFalse((self.project / ".infra/tool.sh").exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            (self.project / ".infra/tool.sh").read_text(),
+            "#!/bin/sh\necho upstream\n",
+        )
 
     def test_dry_run_does_not_write(self) -> None:
         result = self.run_sync("--dry-run")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.project / ".infra/tool.sh").exists())
 
-    def test_yes_overwrites_and_records_mode_and_hash(self) -> None:
+    def test_first_install_rejects_untracked_conflicting_target(self) -> None:
         target = self.project / ".infra/tool.sh"
         target.parent.mkdir()
         target.write_text("locally changed")
         result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(".infra/tool.sh", result.stderr)
+        self.assertEqual(target.read_text(), "locally changed")
+        self.assertFalse((self.project / ".infra/bootstrap-source.json").exists())
+
+    def test_first_install_accepts_identical_untracked_target(self) -> None:
+        target = self.project / ".infra/tool.sh"
+        target.parent.mkdir()
+        target.write_text("#!/bin/sh\necho upstream\n")
+        target.chmod(0o755)
+        result = self.run_sync()
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(target.read_text(), "#!/bin/sh\necho upstream\n")
-        self.assertTrue(target.stat().st_mode & 0o100)
+        self.assertTrue((self.project / ".infra/bootstrap-source.json").is_file())
         snapshot, drift = sync.project_state(self.project)
         self.assertFalse(drift)
         self.assertEqual(snapshot["files"][".infra/tool.sh"]["executable"], True)
+
+    def test_invalid_existing_snapshot_is_not_overwritten(self) -> None:
+        snapshot = self.project / ".infra/bootstrap-source.json"
+        snapshot.parent.mkdir()
+        snapshot.write_text("{}\n")
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("invalid bootstrap snapshot", result.stderr)
+        self.assertEqual(snapshot.read_text(), "{}\n")
+        self.assertFalse((self.project / ".infra/tool.sh").exists())
+
+    def test_managed_drift_is_rejected_even_with_yes(self) -> None:
+        installed = self.run_sync("--yes")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        target = self.project / ".infra/tool.sh"
+        snapshot_before = (self.project / ".infra/bootstrap-source.json").read_bytes()
         target.write_text("modified after installation")
-        _, drift = sync.project_state(self.project)
-        self.assertEqual(drift, [".infra/tool.sh"])
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn(".infra/tool.sh", result.stderr)
+        self.assertEqual(target.read_text(), "modified after installation")
+        self.assertEqual((self.project / ".infra/bootstrap-source.json").read_bytes(), snapshot_before)
 
     def test_path_escape_and_duplicate_targets_are_rejected(self) -> None:
         manifest = self.package / "manifest.json"

@@ -10,6 +10,10 @@
       "executable": true,
       "sha256": "591c4848115d8d51f5fe52b5ec3f2f822f0b2024bd3c3250df8ba928120822af"
     },
+    ".infra/bin/bootstrap-update.sh": {
+      "executable": true,
+      "sha256": "89c4d73df6915e0575f1e4d9bcf6f94b29d77b8aa4dd9151977a7e263996ab11"
+    },
     ".infra/bin/ci-check.sh": {
       "executable": true,
       "sha256": "e563cedf0ac12a9ed406850278b3ddec0b6dc27f5fedd492ac877d61843c3c84"
@@ -48,7 +52,7 @@
     },
     ".infra/bootstrap.sh": {
       "executable": true,
-      "sha256": "51448c0ab75c1962189a5066df452ce6ad741ac53bff4cb70b7f5c4d0020fd5b"
+      "sha256": "6131691e74a841974d404d1ee572194acdb31f40cdf0d499cb4050c8beba8a6c"
     },
     ".infra/dependency/policy.toml": {
       "executable": false,
@@ -76,10 +80,10 @@
     },
     "update-infra.sh": {
       "executable": true,
-      "sha256": "d4687f8f57286d023b55185be016306fa9cc536c69fc9d1888316ad078846cfe"
+      "sha256": "bd679d654b9a6b06a53fb2e45d6c02f3dceb1cb574be9c95f7aa1603c104760d"
     }
   },
-  "package_sha256": "f12e3b7bdfdee31d68ae122259723c9259bca5bbd2a4afa73c46c703a789d557",
+  "package_sha256": "e0b8188b769030092221e05cc01ed8dc218b577ae240bc8e960001d3dba152ac",
   "schema": 1,
   "source_repository": "https://github.com/qubit-ltd/rs-infra-tools.git",
   "source_revision": "19df9c0d42ba8f996626c64b4a12068f5cb4b754"

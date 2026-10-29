@@ -30,6 +30,7 @@ const TOOLS: &[Tool] = &[
     Tool::new("rs-infra-coverage", "rs-infra-coverage", "qubit-infra-coverage"),
     Tool::new("rs-infra-dependency", "rs-infra-dependency", "qubit-infra-dependency"),
     Tool::new("rs-infra-pages", "rs-infra-pages", "qubit-infra-pages"),
+    Tool::new("rs-infra-platform", "rs-infra-platform", "qubit-infra-platform"),
     Tool::new("rs-infra-style", "rs-infra-style", "qubit-infra-style"),
     Tool::new("rs-infra-verify", "rs-infra-verify", "qubit-infra-verify"),
 ];
@@ -534,7 +535,68 @@ mod tests {
     use super::ResolvedTool;
     use super::Tool;
     use super::executable_file_name;
+    use super::find_tool;
     use super::invocation_bin_dir;
+
+    #[test]
+    fn find_tool_identifies_platform_source_package_and_binary() {
+        let tool = find_tool("rs-infra-platform").expect("platform tool must be registered");
+        assert_eq!(tool.name, "rs-infra-platform");
+        assert_eq!(tool.repository, "rs-infra-platform");
+        assert_eq!(tool.package, "qubit-infra-platform");
+        assert_eq!(tool.source(), "https://github.com/qubit-ltd/rs-infra-platform.git");
+        assert_eq!(
+            executable_file_name(tool.name),
+            if cfg!(windows) {
+                "rs-infra-platform.exe"
+            } else {
+                "rs-infra-platform"
+            }
+        );
+    }
+
+    #[test]
+    fn find_tool_rejects_unknown_name() {
+        let error = find_tool("rs-infra-unknown")
+            .err()
+            .expect("unknown tool must be rejected");
+        assert_eq!(error.to_string(), "unknown infrastructure tool 'rs-infra-unknown'");
+    }
+
+    #[test]
+    fn invocation_bin_dir_adds_platform_without_changing_existing_snapshot() {
+        let directory = tempfile::tempdir().expect("temporary cache must be available");
+        let mut tools = Vec::new();
+        for name in ["rs-infra-ci", "rs-infra-platform"] {
+            let tool = find_tool(name).expect("tool must be registered");
+            let executable = directory.path().join(executable_file_name(name));
+            std::fs::write(&executable, name).expect("fixture executable must be written");
+            tools.push(ResolvedTool {
+                tool,
+                revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                executable,
+            });
+        }
+        let previous = invocation_bin_dir(directory.path(), &tools[..1]).expect("existing snapshot must be created");
+        let combined = invocation_bin_dir(directory.path(), &tools).expect("platform snapshot must be created");
+        assert_ne!(previous, combined);
+        for name in ["rs-infra-ci", "rs-infra-platform"] {
+            assert_eq!(
+                std::fs::read(combined.join(executable_file_name(name)))
+                    .expect("snapshot must contain each executable"),
+                name.as_bytes()
+            );
+        }
+        assert_eq!(
+            std::fs::read(previous.join(executable_file_name("rs-infra-ci")))
+                .expect("existing snapshot must remain available"),
+            b"rs-infra-ci"
+        );
+        assert_eq!(
+            invocation_bin_dir(directory.path(), &tools[..1]).expect("existing snapshot must remain reusable"),
+            previous
+        );
+    }
 
     #[test]
     fn invocation_bin_dir_contains_tools_and_repairs_incomplete_cache() {

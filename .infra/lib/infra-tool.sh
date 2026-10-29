@@ -4,12 +4,14 @@ set -euo pipefail
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 project_root=${RS_INFRA_PROJECT_ROOT:-$(cd "$script_dir/../.." && pwd -P)}
 shared_root=${RS_INFRA_SHARED_ROOT:-$(cd "$script_dir/../.." && pwd -P)}
-source "$shared_root/.infra/lib/cleanup-build-artifacts.sh"
+if [ "${1:-}" != rs-infra-platform ]; then
+    source "$shared_root/.infra/lib/cleanup-build-artifacts.sh"
+fi
 [ "$#" -ge 1 ] || { echo "usage: infra-tool.sh rs-infra-TOOL [ARGS...]" >&2; exit 2; }
 tool="$1"
 shift
 case "$tool" in
-    rs-infra-ci|rs-infra-coverage|rs-infra-dependency|rs-infra-pages|rs-infra-style|rs-infra-verify) ;;
+    rs-infra-ci|rs-infra-coverage|rs-infra-dependency|rs-infra-pages|rs-infra-platform|rs-infra-style|rs-infra-verify) ;;
     *) echo "error: unknown infra tool '$tool'" >&2; exit 2 ;;
 esac
 if [ -n "${RS_INFRA_BIN_DIR:-}" ] && [ -x "$RS_INFRA_BIN_DIR/$tool" ]; then

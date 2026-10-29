@@ -13,6 +13,292 @@ BOOTSTRAP = REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh"
 
 
 class BootstrapDispatchTests(unittest.TestCase):
+    def test_stable_update_script_initializes_project_without_infra(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stable-update-initialize-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+            updater = project / "update-infra.sh"
+            shutil.copyfile(REPO / "update-infra.sh", updater)
+            updater.chmod(0o755)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            git = bin_dir / "git"
+            git.write_text(
+                "#!/usr/bin/env bash\n"
+                'if [[ "$1" == clone ]]; then\n'
+                '  destination="${@: -1}"\n'
+                '  mkdir -p "$destination/assets/project-bootstrap"\n'
+                '  touch "$destination/assets/project-bootstrap/sync.py"\n'
+                'elif [[ "$1" == -C ]]; then\n'
+                '  printf "0123456789abcdef0123456789abcdef01234567\\n"\n'
+                'else exit 2; fi\n'
+            )
+            git.chmod(0o755)
+            python = bin_dir / "python-stub"
+            call_log = root / "python-args"
+            python.write_text(
+                "#!/usr/bin/env bash\n"
+                'if [[ "${1:-}" == -c ]]; then exit 0; fi\n'
+                'printf "%s\\n" "$@" > "$PYTHON_CALL_LOG"\n'
+            )
+            python.chmod(0o755)
+            cargo = bin_dir / "cargo"
+            cargo_log = root / "cargo-args"
+            cargo.write_text(
+                "#!/usr/bin/env bash\n"
+                'printf "%s\\n" "$@" > "$CARGO_CALL_LOG"\n'
+            )
+            cargo.chmod(0o755)
+            env = os.environ | {
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                "TMPDIR": str(root),
+                "RS_INFRA_PYTHON": str(python),
+                "PYTHON_CALL_LOG": str(call_log),
+                "CARGO_CALL_LOG": str(cargo_log),
+            }
+            for option in ([], ["--dry-run"], ["--status"]):
+                with self.subTest(option=option):
+                    cargo_log.unlink(missing_ok=True)
+                    result = subprocess.run(
+                        ["bash", str(updater), *option], env=env,
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    args = call_log.read_text().splitlines()
+                    self.assertTrue(args[0].endswith("/assets/project-bootstrap/sync.py"))
+                    self.assertIn("--project-root", args)
+                    self.assertEqual(args[args.index("--project-root") + 1], str(project))
+                    self.assertIn("--package-root", args)
+                    self.assertEqual(args[-len(option):] if option else [], option)
+                    self.assertNotIn("--yes", args)
+                    self.assertEqual(list(root.glob("rs-infra-bootstrap.*")), [])
+                    if option:
+                        self.assertFalse(cargo_log.exists())
+                    else:
+                        self.assertTrue(cargo_log.is_file())
+                        self.assertEqual(
+                            cargo_log.read_text().splitlines()[-4:],
+                            ["--", "prewarm", "--project", str(project)],
+                        )
+
+    def test_stable_update_script_delegates_existing_project_to_bootstrap(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stable-update-delegate-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            (project / ".infra").mkdir(parents=True)
+            updater = project / "update-infra.sh"
+            shutil.copyfile(REPO / "update-infra.sh", updater)
+            updater.chmod(0o755)
+            call_log = root / "bootstrap-args"
+            bootstrap = project / ".infra/bootstrap.sh"
+            bootstrap.write_text(
+                "#!/usr/bin/env bash\n"
+                'printf "%s\\n" "$@" > "$BOOTSTRAP_CALL_LOG"\n'
+            )
+            bootstrap.chmod(0o755)
+            for option in ([], ["--dry-run"], ["--status"]):
+                result = subprocess.run(
+                    ["bash", str(updater), *option],
+                    env=os.environ | {"BOOTSTRAP_CALL_LOG": str(call_log)},
+                    capture_output=True, text=True, timeout=3,
+                )
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                args = call_log.read_text().splitlines()
+                self.assertEqual(args[0], ".infra/bin/bootstrap-update.sh")
+                self.assertEqual(args[1:], option)
+            checker = project / ".infra/bootstrap-check.py"
+            checker.write_text("# local checker fixture\n")
+            python = root / "python-stub"
+            python.write_text(
+                "#!/usr/bin/env bash\n"
+                'if [[ "${1:-}" == -c ]]; then exit 0; fi\n'
+                'printf "%s\\n" "$@" > "$PYTHON_CALL_LOG"\n'
+            )
+            python.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(updater), "--check"],
+                env=os.environ | {"RS_INFRA_PYTHON": str(python), "PYTHON_CALL_LOG": str(call_log)},
+                capture_output=True, text=True, timeout=3,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(call_log.read_text().splitlines(), [str(checker)])
+
+    def test_manager_repository_update_preserves_its_bootstrap_scripts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stable-update-manager-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            (project / ".infra").mkdir(parents=True)
+            (project / "Cargo.toml").write_text(
+                '[package]\nname = "qubit-infra-tools"\nversion = "0.1.0"\n'
+            )
+            updater = project / "update-infra.sh"
+            shutil.copyfile(REPO / "update-infra.sh", updater)
+            call_log = root / "bootstrap-args"
+            bootstrap = project / ".infra/bootstrap.sh"
+            bootstrap.write_text(
+                "#!/usr/bin/env bash\n"
+                'printf "%s\\n" "$@" > "$BOOTSTRAP_CALL_LOG"\n'
+            )
+            bootstrap.chmod(0o755)
+            result = subprocess.run(
+                ["bash", str(updater), "--dry-run"],
+                env=os.environ | {"BOOTSTRAP_CALL_LOG": str(call_log)},
+                capture_output=True, text=True, timeout=3,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(
+                call_log.read_text().splitlines(),
+                [".infra/bin/bootstrap-update.sh", "--configs-only", "--dry-run"],
+            )
+
+    def test_stable_update_check_reports_uninitialized_project(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="stable-update-check-") as temp:
+            project = Path(temp)
+            updater = project / "update-infra.sh"
+            shutil.copyfile(REPO / "update-infra.sh", updater)
+            result = subprocess.run(
+                ["bash", str(updater), "--check"], capture_output=True, text=True, timeout=3
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("not initialized", result.stderr)
+
+    def test_bootstrap_update_route_runs_manager_sync_source(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bootstrap-update-route-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            shared = root / "shared"
+            package = shared / "assets/project-bootstrap"
+            package.mkdir(parents=True)
+            call_log = root / "sync-args"
+            (package / "sync.py").write_text(
+                "import os, sys\n"
+                "with open(os.environ['SYNC_CALL_LOG'], 'w', encoding='utf-8') as stream:\n"
+                "    stream.write('\\n'.join(sys.argv[1:]))\n"
+            )
+            manager = root / "manager"
+            manager.write_text("#!/usr/bin/env bash\nexit 99\n")
+            manager.chmod(0o755)
+            env = os.environ | {
+                "RS_INFRA_PROJECT_ROOT": str(project),
+                "RS_INFRA_SHARED_ROOT": str(shared),
+                "RS_INFRA_TOOLS_BIN": str(manager),
+                "RS_INFRA_CACHE_DIR": str(root / "cache"),
+                "SYNC_CALL_LOG": str(call_log),
+            }
+            for bootstrap in (
+                REPO / "assets/bootstrap.sh",
+                REPO / ".infra/bootstrap.sh",
+                BOOTSTRAP,
+            ):
+                prewarm_log = root / "manager-args"
+                manager.write_text(
+                    "#!/usr/bin/env bash\n"
+                    'printf "%s\\n" "$@" > "$MANAGER_CALL_LOG"\n'
+                )
+                manager.chmod(0o755)
+                for option in ([], ["--dry-run"], ["--status"], ["--configs-only"]):
+                    with self.subTest(bootstrap=bootstrap, option=option):
+                        prewarm_log.unlink(missing_ok=True)
+                        result = subprocess.run(
+                            ["bash", str(bootstrap), ".infra/bin/bootstrap-update.sh", *option],
+                            env=env | {"MANAGER_CALL_LOG": str(prewarm_log)},
+                            capture_output=True, text=True, timeout=3,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                        self.assertEqual(
+                            call_log.read_text().splitlines(),
+                            ["--project-root", str(project), "--package-root", str(package), *option],
+                        )
+                        if "--dry-run" in option or "--status" in option:
+                            self.assertFalse(prewarm_log.exists())
+                        else:
+                            self.assertEqual(
+                                prewarm_log.read_text().splitlines(),
+                                ["prewarm", "--project", str(project)],
+                            )
+
+    def test_infra_tool_wrapper_runs_cached_platform_binary(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="bootstrap-platform-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            scripts = project / ".infra/bin"
+            scripts.mkdir(parents=True)
+            keep = project / "target/debug/keep"
+            keep.parent.mkdir(parents=True)
+            keep.write_text("original project artifact")
+            wrapper = scripts / "infra-tool.sh"
+            shutil.copyfile(REPO / ".infra/bin/infra-tool.sh", wrapper)
+            bootstrap = project / ".infra/bootstrap.sh"
+            shutil.copyfile(REPO / ".infra/bootstrap.sh", bootstrap)
+            bootstrap.chmod(0o755)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            call_log = root / "calls"
+            platform = bin_dir / "rs-infra-platform"
+            platform.write_text(
+                "#!/usr/bin/env bash\n"
+                'printf "%s\\n" "$@" > "$CALL_LOG"\n'
+                "exit 23\n"
+            )
+            platform.chmod(0o755)
+            manager = root / "manager"
+            manager.write_text("#!/usr/bin/env bash\nexit 99\n")
+            manager.chmod(0o755)
+            env = os.environ | {
+                "RS_INFRA_PROJECT_ROOT": str(project),
+                "RS_INFRA_SHARED_ROOT": str(REPO),
+                "RS_INFRA_TOOLS_BIN": str(manager),
+                "RS_INFRA_BIN_DIR": str(bin_dir),
+                "RS_INFRA_CACHE_DIR": str(root / "cache"),
+                "CALL_LOG": str(call_log),
+            }
+            args = ["--project", str(project), "check"]
+            result = subprocess.run(
+                ["bash", str(wrapper), "rs-infra-platform", *args],
+                env=env, capture_output=True, text=True, timeout=3,
+            )
+            self.assertEqual(result.returncode, 23, result.stderr)
+            self.assertEqual(call_log.read_text().splitlines(), args)
+            self.assertEqual(keep.read_text(), "original project artifact")
+            rejected = subprocess.run(
+                ["bash", str(wrapper), "rs-infra-unknown"],
+                env=env, capture_output=True, text=True, timeout=3,
+            )
+            self.assertEqual(rejected.returncode, 2, rejected.stderr)
+            self.assertIn("unknown infra tool 'rs-infra-unknown'", rejected.stderr)
+            self.assertEqual(call_log.read_text().splitlines(), args)
+
+    def test_platform_runtime_failure_preserves_original_target(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="platform-cleanup-boundary-") as temp:
+            root = Path(temp)
+            project = root / "project"
+            keep = project / "target/debug/keep"
+            keep.parent.mkdir(parents=True)
+            env = os.environ | {
+                "RS_INFRA_PROJECT_ROOT": str(project),
+                "RS_INFRA_SHARED_ROOT": str(REPO),
+                "RS_INFRA_TOOLS_BIN": str(root / "missing-manager"),
+                "RS_INFRA_BIN_DIR": str(root / "empty-bin"),
+            }
+            env.pop("RS_INFRA_CLEANUP_OWNER_PID", None)
+            for tool in ("rs-infra-platform", "rs-infra-style"):
+                with self.subTest(tool=tool):
+                    keep.parent.mkdir(parents=True, exist_ok=True)
+                    keep.write_text("original project artifact")
+                    result = subprocess.run(
+                        ["bash", str(REPO / ".infra/lib/infra-tool.sh"), tool,
+                         "--project", str(project), "check", "--no-cleanup"],
+                        env=env, capture_output=True, text=True, timeout=3,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertIn("runtime is unavailable", result.stderr)
+                    if tool == "rs-infra-platform":
+                        self.assertTrue(keep.is_file(), result.stdout)
+                        self.assertEqual(keep.read_text(), "original project artifact")
+                    else:
+                        self.assertFalse(keep.exists(), "legacy cleanup must remain active")
+
     def test_ci_check_builds_declared_node_test_worker_before_rust_ci(self) -> None:
         with tempfile.TemporaryDirectory(prefix="bootstrap-ci-worker-") as temp:
             root = Path(temp)
