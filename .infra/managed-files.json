@@ -4,6 +4,7 @@
     ".github/workflows/ci.yml",
     ".gitignore",
     ".infra/bin/align-ci.sh",
+    ".infra/bin/cargo-update.sh",
     ".infra/bin/ci-check.sh",
     ".infra/bin/coverage.sh",
     ".infra/bin/dependency-update.sh",
