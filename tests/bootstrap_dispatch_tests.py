@@ -124,7 +124,7 @@ class BootstrapDispatchTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(call_log.read_text().splitlines(), [str(checker)])
 
-    def test_manager_repository_update_preserves_its_bootstrap_scripts(self) -> None:
+    def test_manager_repository_update_uses_full_bootstrap_sync(self) -> None:
         with tempfile.TemporaryDirectory(prefix="stable-update-manager-") as temp:
             root = Path(temp)
             project = root / "project"
@@ -141,16 +141,18 @@ class BootstrapDispatchTests(unittest.TestCase):
                 'printf "%s\\n" "$@" > "$BOOTSTRAP_CALL_LOG"\n'
             )
             bootstrap.chmod(0o755)
-            result = subprocess.run(
-                ["bash", str(updater), "--dry-run"],
-                env=os.environ | {"BOOTSTRAP_CALL_LOG": str(call_log)},
-                capture_output=True, text=True, timeout=3,
-            )
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            self.assertEqual(
-                call_log.read_text().splitlines(),
-                [".infra/bin/bootstrap-update.sh", "--configs-only", "--dry-run"],
-            )
+            for option in ([], ["--dry-run"], ["--status"]):
+                with self.subTest(option=option):
+                    result = subprocess.run(
+                        ["bash", str(updater), *option],
+                        env=os.environ | {"BOOTSTRAP_CALL_LOG": str(call_log)},
+                        capture_output=True, text=True, timeout=3,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertEqual(
+                        call_log.read_text().splitlines(),
+                        [".infra/bin/bootstrap-update.sh", *option],
+                    )
 
     def test_stable_update_check_reports_uninitialized_project(self) -> None:
         with tempfile.TemporaryDirectory(prefix="stable-update-check-") as temp:

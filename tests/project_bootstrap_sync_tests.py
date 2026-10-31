@@ -51,6 +51,10 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
             {"source": "files/.infra/bin/bootstrap-update.sh", "target": ".infra/bin/bootstrap-update.sh", "executable": True},
             manifest["files"],
         )
+        self.assertIn(
+            {"source": "files/.infra/bin/cargo-update.sh", "target": ".infra/bin/cargo-update.sh", "executable": True},
+            manifest["files"],
+        )
         self.assertEqual(updater, repository_updater)
         with mock.patch.object(sync.subprocess, "run", side_effect=AssertionError("unexpected clone")):
             entries, versions = sync.config_entries(
@@ -87,6 +91,27 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
             (self.project / ".infra/tool.sh").read_text(),
             "#!/bin/sh\necho upstream\n",
         )
+
+    def test_update_installs_missing_cargo_updater_and_is_idempotent(self) -> None:
+        target = ".infra/bin/cargo-update.sh"
+        source = "source/cargo-update.sh"
+        (self.package / source).write_text("#!/bin/sh\necho cargo-update\n")
+        manifest = json.loads((self.package / "manifest.json").read_text())
+        manifest["files"].append({"source": source, "target": target, "executable": True})
+        (self.package / "manifest.json").write_text(json.dumps(manifest))
+
+        installed = self.run_sync("--yes")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        script = self.project / target
+        self.assertEqual(script.read_text(), "#!/bin/sh\necho cargo-update\n")
+        self.assertTrue(script.stat().st_mode & 0o100)
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertEqual(snapshot["files"][target]["sha256"], sync.digest(script.read_bytes()))
+
+        unchanged = self.run_sync("--yes")
+        self.assertEqual(unchanged.returncode, 0, unchanged.stderr)
+        self.assertIn("already up to date", unchanged.stdout)
 
     def test_dry_run_does_not_write(self) -> None:
         result = self.run_sync("--dry-run")
