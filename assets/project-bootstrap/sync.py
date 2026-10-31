@@ -286,7 +286,7 @@ def obsolete_baselines(project: Path, snapshot: dict, current_targets: set[str])
 
 
 def retired_config_paths(project: Path, manifest: dict, snapshot: dict, current_targets: set[str]) -> list[Path]:
-    """Retire only targets still matching their previous managed snapshot."""
+    """Remove unchanged retired files and release modified ones to the project."""
     obsolete = []
     recorded = snapshot.get("files", {})
     for target in manifest.get("retired_targets", []):
@@ -294,15 +294,15 @@ def retired_config_paths(project: Path, manifest: dict, snapshot: dict, current_
             continue
         path = safe_path(project, target)
         record = recorded.get(target)
-        if record is None:
-            if path.exists():
-                raise ValueError(f"retired config is not recorded in snapshot: {target}")
+        if not path.exists():
             continue
-        if not path.is_file() or digest(path.read_bytes()) != record.get("sha256"):
-            raise ValueError(f"retired config was modified or is missing: {target}")
+        if not path.is_file():
+            raise ValueError(f"retired config is not a regular file: {target}")
+        if record is None or digest(path.read_bytes()) != record.get("sha256"):
+            continue
         mode = bool(path.stat().st_mode & stat.S_IXUSR)
         if not executable_mode_matches(mode, record.get("executable")):
-            raise ValueError(f"retired config mode was modified: {target}")
+            continue
         obsolete.append(path)
     return obsolete
 

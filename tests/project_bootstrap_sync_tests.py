@@ -30,6 +30,9 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
             manifest["config_sources"],
         )
         self.assertIn(".infra/ci/defaults.toml", manifest["retired_targets"])
+        self.assertIn(".infra/style/exceptions.toml", manifest["retired_targets"])
+        self.assertNotIn("style-exceptions-default", manifest["profiles"])
+        self.assertFalse((PACKAGE / "files/config/style-exceptions-default").exists())
         self.assertTrue(all(
             source.get("local") == "manager" or source["repository"].startswith("https://github.com/qubit-ltd/")
             for source in manifest["config_sources"]
@@ -380,31 +383,34 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue((self.project / ".infra/tools/defaults.toml").exists())
 
-    def test_retirement_rejects_modified_old_defaults_before_other_writes(self) -> None:
+    def test_retirement_preserves_modified_old_defaults_and_releases_them(self) -> None:
         old = self.install_old_defaults()
         old.write_text("local changes\n")
         self.write_manager_config()
         self.enable_defaults_retirement()
-        original_tool = (self.project / ".infra/tool.sh").read_bytes()
         (self.package / "source/tool.sh").write_text("new upstream tool\n")
         result = self.run_sync("--yes")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn(".infra/ci/defaults.toml", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(old.read_text(), "local changes\n")
-        self.assertEqual((self.project / ".infra/tool.sh").read_bytes(), original_tool)
-        self.assertFalse((self.project / ".infra/tools/defaults.toml").exists())
+        self.assertEqual((self.project / ".infra/tool.sh").read_text(), "new upstream tool\n")
+        self.assertTrue((self.project / ".infra/tools/defaults.toml").exists())
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(".infra/ci/defaults.toml", snapshot["files"])
 
-    def test_retirement_rejects_missing_snapshot_owned_old_defaults(self) -> None:
+    def test_retirement_accepts_missing_snapshot_owned_old_defaults(self) -> None:
         old = self.install_old_defaults()
         old.unlink()
         self.write_manager_config()
         self.enable_defaults_retirement()
         result = self.run_sync("--yes")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn(".infra/ci/defaults.toml", result.stderr)
-        self.assertFalse((self.project / ".infra/tools/defaults.toml").exists())
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(old.exists())
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(".infra/ci/defaults.toml", snapshot["files"])
 
-    def test_retirement_rejects_untracked_old_defaults(self) -> None:
+    def test_retirement_preserves_untracked_old_defaults(self) -> None:
         old = self.install_old_defaults()
         snapshot_path = self.project / ".infra/bootstrap-source.json"
         snapshot = json.loads(snapshot_path.read_text())
@@ -413,10 +419,60 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.write_manager_config()
         self.enable_defaults_retirement()
         result = self.run_sync("--yes")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
-        self.assertIn(".infra/ci/defaults.toml", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(old.exists())
-        self.assertFalse((self.project / ".infra/tools/defaults.toml").exists())
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(".infra/ci/defaults.toml", snapshot["files"])
+        self.assertTrue((self.project / ".infra/tools/defaults.toml").exists())
+
+    def install_old_managed_file(self, target: str, content: str) -> Path:
+        installed = self.run_sync("--yes")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        path = self.project / target
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        snapshot_path = self.project / ".infra/bootstrap-source.json"
+        snapshot = json.loads(snapshot_path.read_text())
+        snapshot["files"][target] = {"sha256": sync.digest(path.read_bytes()), "executable": False}
+        snapshot_path.write_text(json.dumps(snapshot))
+        manifest_path = self.package / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["retired_targets"] = [target]
+        manifest_path.write_text(json.dumps(manifest))
+        return path
+
+    def test_retired_default_exceptions_file_is_removed(self) -> None:
+        target = ".infra/style/exceptions.toml"
+        path = self.install_old_managed_file(target, "format = 1\n")
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(path.exists())
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(target, snapshot["files"])
+
+    def test_retired_custom_exceptions_file_is_preserved_and_released(self) -> None:
+        target = ".infra/style/exceptions.toml"
+        path = self.install_old_managed_file(target, "format = 1\n")
+        custom = "format = 1\n\n[[exceptions]]\nrule = \"test-redirect\"\n"
+        path.write_text(custom)
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(path.read_text(), custom)
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(target, snapshot["files"])
+
+    def test_missing_retired_exceptions_file_is_ignored(self) -> None:
+        target = ".infra/style/exceptions.toml"
+        path = self.install_old_managed_file(target, "format = 1\n")
+        path.unlink()
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        snapshot, drift = sync.project_state(self.project)
+        self.assertFalse(drift)
+        self.assertNotIn(target, snapshot["files"])
 
     def test_configs_only_preserves_package_records_and_retires_old_defaults(self) -> None:
         old = self.install_old_defaults()

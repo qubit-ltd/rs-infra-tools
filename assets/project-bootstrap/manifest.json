@@ -23,7 +23,8 @@
     }
   ],
   "retired_targets": [
-    ".infra/ci/defaults.toml"
+    ".infra/ci/defaults.toml",
+    ".infra/style/exceptions.toml"
   ],
   "files": [
     {
@@ -123,13 +124,6 @@
       {
         "source": "files/config/pages-default",
         "target": ".infra/pages/pages.json",
-        "executable": false
-      }
-    ],
-    "style-exceptions-default": [
-      {
-        "source": "files/config/style-exceptions-default",
-        "target": ".infra/style/exceptions.toml",
         "executable": false
       }
     ]
