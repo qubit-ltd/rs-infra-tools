@@ -419,10 +419,10 @@ def main() -> int:
 
                 conflicts = conflicting_targets(project, old_snapshot, drift, planned_sources)
                 if conflicts:
-                    print("error: managed file conflicts; resolve local changes before updating:", file=sys.stderr)
+                    print("warning: skipping locally modified managed files; continuing with other updates:", file=sys.stderr)
                     for target in conflicts:
                         print(f"  {target}", file=sys.stderr)
-                    return 2
+                conflicted_targets = set(conflicts)
 
                 if args.configs_only:
                     package_targets = {entry["target"] for entry in manifest["files"]}
@@ -446,6 +446,8 @@ def main() -> int:
                 obsolete.extend(retired_config_paths(project, manifest, old_snapshot, current_targets))
                 planned: list[tuple[dict, Path, bytes]] = []
                 for entry, source in planned_sources:
+                    if entry["target"] in conflicted_targets:
+                        continue
                     target = safe_path(project, entry["target"])
                     if target.exists() and not target.is_file():
                         raise ValueError(f"target is not a regular file: {entry['target']}")

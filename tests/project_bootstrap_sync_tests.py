@@ -118,15 +118,18 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.project / ".infra/tool.sh").exists())
 
-    def test_first_install_rejects_untracked_conflicting_target(self) -> None:
+    def test_first_install_preserves_untracked_conflict_and_records_drift(self) -> None:
         target = self.project / ".infra/tool.sh"
         target.parent.mkdir()
         target.write_text("locally changed")
         result = self.run_sync("--yes")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("skipping locally modified managed files", result.stderr)
         self.assertIn(".infra/tool.sh", result.stderr)
         self.assertEqual(target.read_text(), "locally changed")
-        self.assertFalse((self.project / ".infra/bootstrap-source.json").exists())
+        snapshot, drift = sync.project_state(self.project)
+        self.assertIn(".infra/tool.sh", snapshot["files"])
+        self.assertEqual(drift, [".infra/tool.sh"])
 
     def test_first_install_accepts_identical_untracked_target(self) -> None:
         target = self.project / ".infra/tool.sh"
@@ -150,17 +153,34 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertEqual(snapshot.read_text(), "{}\n")
         self.assertFalse((self.project / ".infra/tool.sh").exists())
 
-    def test_managed_drift_is_rejected_even_with_yes(self) -> None:
+    def test_managed_drift_is_preserved_while_other_files_update(self) -> None:
         installed = self.run_sync("--yes")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         target = self.project / ".infra/tool.sh"
         snapshot_before = (self.project / ".infra/bootstrap-source.json").read_bytes()
         target.write_text("modified after installation")
+
+        updater_source = self.package / "source/cargo-update.sh"
+        updater_source.write_text("#!/bin/sh\necho cargo-update\n")
+        manifest = json.loads((self.package / "manifest.json").read_text())
+        manifest["files"].append({
+            "source": "source/cargo-update.sh",
+            "target": ".infra/bin/cargo-update.sh",
+            "executable": True,
+        })
+        (self.package / "manifest.json").write_text(json.dumps(manifest))
+
         result = self.run_sync("--yes")
-        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(".infra/tool.sh", result.stderr)
         self.assertEqual(target.read_text(), "modified after installation")
-        self.assertEqual((self.project / ".infra/bootstrap-source.json").read_bytes(), snapshot_before)
+        cargo_updater = self.project / ".infra/bin/cargo-update.sh"
+        self.assertEqual(cargo_updater.read_text(), "#!/bin/sh\necho cargo-update\n")
+        self.assertTrue(cargo_updater.stat().st_mode & 0o100)
+        self.assertNotEqual((self.project / ".infra/bootstrap-source.json").read_bytes(), snapshot_before)
+        snapshot, drift = sync.project_state(self.project)
+        self.assertEqual(drift, [".infra/tool.sh"])
+        self.assertIn(".infra/bin/cargo-update.sh", snapshot["files"])
 
     def test_path_escape_and_duplicate_targets_are_rejected(self) -> None:
         manifest = self.package / "manifest.json"

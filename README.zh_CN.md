@@ -23,7 +23,7 @@ cargo install --git https://github.com/qubit-ltd/rs-infra-tools.git --tag v0.1.0
 ./update-infra.sh
 ```
 
-首次运行需要 Git、Python 3.10 或更高版本、Rust 1.94 或更高版本以及 Cargo。Git 和 Python 会获取 manager 的 `main` 并初始化 `.infra`；随后 Rust/Cargo 从源码构建 manager，并预热已登记工具。之后的默认更新会刷新受管理文件和已登记配置源的 `main` 内容，再预热 manager 和所有已登记工具仓库的最新 `main` 版本。若 `.infra` 已存在，根目录入口会交给其中的 bootstrap 执行这套更新流程。`--dry-run` 只列计划，`--status` 比较本地文件与上游内容；这两种模式都不会预热已登记工具。`--check` 仅检查本地快照且不联网。为兼容旧调用仍接受 `--yes`。如果受管理文件有本地修改，更新器会列出冲突路径并停止，不会覆盖；manifest 之外的项目自有文件保持不变。在 `rs-infra-tools` 仓库自身，配置专用同步模式会保留仓库特有的 bootstrap 脚本。CI 应在运行基础设施命令前执行 `--check`。
+首次运行需要 Git、Python 3.10 或更高版本、Rust 1.94 或更高版本以及 Cargo。Git 和 Python 会获取 manager 的 `main` 并初始化 `.infra`；随后 Rust/Cargo 从源码构建 manager，并预热已登记工具。之后的默认更新会刷新受管理文件和已登记配置源的 `main` 内容，再预热 manager 和所有已登记工具仓库的最新 `main` 版本。若 `.infra` 已存在，根目录入口会交给其中的 bootstrap 执行这套更新流程。`--dry-run` 只列计划，`--status` 比较本地文件与上游内容；这两种模式都不会预热已登记工具。`--check` 仅检查本地快照且不联网。为兼容旧调用仍接受 `--yes`。如果受管理文件有本地修改，更新器会列出冲突路径，跳过这些文件并继续更新其他文件；它不会覆盖冲突文件，`--check` 仍会报告这些文件的漂移。manifest 之外的项目自有文件保持不变。`rs-infra-tools` 仓库自身也会按完整 manifest 更新。CI 应在运行基础设施命令前执行 `--check`。
 
 默认共享缓存位于 `${XDG_CACHE_HOME:-~/.cache}/qubit/rs-infra`。设置 `RS_INFRA_CACHE_DIR` 可以更换缓存根目录。源码和编译结果按 Git 提交、主机目标及 Rust 编译器版本区分。网络操作默认最多重试 4 次，等待时间按 2、4、8 秒递增；可以用 `RS_INFRA_NETWORK_MAX_ATTEMPTS` 和 `RS_INFRA_NETWORK_RETRY_DELAY_SECONDS` 调整策略。
 
