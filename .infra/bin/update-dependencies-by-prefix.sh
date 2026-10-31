@@ -9,7 +9,7 @@ usage() {
     cat <<'EOF'
 Usage: .infra/bin/update-dependencies-by-prefix.sh [--project <crate-dir>] --prefix <prefix> [--prefix <prefix> ...]
 
-Update crates.io dependencies in the current crate whose names match any prefix to the latest stable version's `^major.minor` requirement, ignoring patch versions.
+Update crates.io dependencies in the project directory and its subdirectories whose names match any prefix to the latest stable version's `^major.minor` requirement, ignoring patch versions.
 Preserve other dependency settings such as features, optional, and default-features; skip Git and path dependencies.
 
 Options:
@@ -71,9 +71,15 @@ manifest="${project_root}/Cargo.toml"
 [[ -f "$manifest" ]] || { printf 'Cargo.toml not found: %s\n' "$manifest" >&2; exit 2; }
 
 prefix_json="$(printf '%s\n' "${prefixes[@]}" | jq -R . | jq -s .)"
-metadata="$(cargo metadata --manifest-path "$manifest" --format-version 1 --no-deps)"
-mapfile -t dependencies < <(
-    jq -r --argjson prefixes "$prefix_json" --arg manifest "$manifest" '
+mapfile -d '' -t manifests < <(
+    find "$project_root" -mindepth 1 -type d \( -name '.*' -o -name target -o -path '*/tests/fixtures' \) -prune -o \
+        -type f -name Cargo.toml -print0 | sort -z
+)
+found=0
+for manifest in "${manifests[@]}"; do
+    metadata="$(cargo metadata --manifest-path "$manifest" --format-version 1 --no-deps)"
+    mapfile -t dependencies < <(
+        jq -r --argjson prefixes "$prefix_json" --arg manifest "$manifest" '
         .packages[]
         | select(.manifest_path == $manifest)
         | .dependencies[]
@@ -81,43 +87,42 @@ mapfile -t dependencies < <(
         | select(.name as $name | any($prefixes[]; . as $prefix | $name | startswith($prefix)))
         | {name, rename, kind: (.kind // "normal"), target}
         | @json
-    ' <<<"$metadata"
-)
-
-if ((${#dependencies[@]} == 0)); then
-    printf 'No direct crates.io dependencies matched the specified prefixes.\n'
-    exit 0
-fi
-
-for dependency in "${dependencies[@]}"; do
-    name="$(jq -r '.name' <<<"$dependency")"
-    rename="$(jq -r '.rename // ""' <<<"$dependency")"
-    kind="$(jq -r '.kind' <<<"$dependency")"
-    target="$(jq -r '.target // ""' <<<"$dependency")"
-    args=()
-    case "$kind" in
-        dev) args+=(--dev) ;;
-        build) args+=(--build) ;;
-        normal) ;;
-        *) printf 'Skipping unsupported dependency type: %s (%s)\n' "$name" "$kind" >&2; continue ;;
-    esac
-    [[ -z "$target" ]] || args+=(--target "$target")
-    [[ -z "$rename" ]] || args+=(--rename "$rename")
-    latest_version="$(curl --fail --silent --show-error \
-        --user-agent 'rs-infra-tools dependency-prefix-updater' \
-        "https://crates.io/api/v1/crates/${name}" \
-        | jq -er '.crate.max_stable_version // empty')" || {
-        printf 'Could not fetch the latest stable version of %s from crates.io.\n' "$name" >&2
-        exit 1
-    }
-    if [[ "$latest_version" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+(\+[0-9A-Za-z.-]+)?$ ]]; then
-        requirement="^${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-    else
-        printf 'crates.io returned an unrecognized stable version for %s: %s\n' "$name" "$latest_version" >&2
-        exit 1
-    fi
-    printf 'Updating %s%s: latest stable version %s, Cargo requirement %s\n' \
-        "$name" "${rename:+ (alias: $rename)}" "$latest_version" "$requirement"
-    [[ "$dry_run" -eq 0 ]] || args+=(--dry-run)
-    cargo add "${args[@]}" "${name}@${requirement}" --manifest-path "$manifest"
+        ' <<<"$metadata"
+    )
+    for dependency in "${dependencies[@]}"; do
+        found=1
+        name="$(jq -r '.name' <<<"$dependency")"
+        rename="$(jq -r '.rename // ""' <<<"$dependency")"
+        kind="$(jq -r '.kind' <<<"$dependency")"
+        target="$(jq -r '.target // ""' <<<"$dependency")"
+        args=()
+        case "$kind" in
+            dev) args+=(--dev) ;;
+            build) args+=(--build) ;;
+            normal) ;;
+            *) printf 'Skipping unsupported dependency type: %s (%s)\n' "$name" "$kind" >&2; continue ;;
+        esac
+        [[ -z "$target" ]] || args+=(--target "$target")
+        [[ -z "$rename" ]] || args+=(--rename "$rename")
+        latest_version="$(curl --fail --silent --show-error \
+            --user-agent 'rs-infra-tools dependency-prefix-updater' \
+            "https://crates.io/api/v1/crates/${name}" \
+            | jq -er '.crate.max_stable_version // empty')" || {
+            printf 'Could not fetch the latest stable version of %s from crates.io.\n' "$name" >&2
+            exit 1
+        }
+        if [[ "$latest_version" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+(\+[0-9A-Za-z.-]+)?$ ]]; then
+            requirement="^${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+        else
+            printf 'crates.io returned an unrecognized stable version for %s: %s\n' "$name" "$latest_version" >&2
+            exit 1
+        fi
+        printf 'Updating %s%s: latest stable version %s, Cargo requirement %s\n' \
+            "$name" "${rename:+ (alias: $rename)}" "$latest_version" "$requirement"
+        [[ "$dry_run" -eq 0 ]] || args+=(--dry-run)
+        cargo add "${args[@]}" "${name}@${requirement}" --manifest-path "$manifest"
+    done
 done
+if ((found == 0)); then
+    printf 'No direct crates.io dependencies matched the specified prefixes.\n'
+fi
