@@ -26,6 +26,10 @@
     ".infra/ci/defaults.toml",
     ".infra/style/exceptions.toml"
   ],
+  "deprecated_profiles": [
+    "dependency-policy-default",
+    "style-exceptions-default"
+  ],
   "files": [
     {
       "source": "files/.infra/bootstrap.sh",

@@ -163,6 +163,39 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         selected = sync.selected_entries(sync.load_manifest(self.package), self.project)
         self.assertEqual([entry["target"] for entry in selected], [".infra/tool.sh", ".infra/config.toml"])
 
+    def test_deprecated_profile_is_removed_from_project_config_during_update(self) -> None:
+        manifest = json.loads((self.package / "manifest.json").read_text())
+        (self.package / "source/config.toml").write_text("managed = true\n")
+        manifest["profiles"] = {"shared-default": [
+            {"source": "source/config.toml", "target": ".infra/config.toml", "executable": False}
+        ]}
+        manifest["deprecated_profiles"] = ["style-exceptions-default"]
+        (self.package / "manifest.json").write_text(json.dumps(manifest))
+        (self.project / ".infra").mkdir()
+        config = self.project / ".infra/bootstrap-update.toml"
+        config.write_text('profiles = ["style-exceptions-default", "shared-default"]\n')
+
+        dry_run = self.run_sync("--dry-run")
+        self.assertEqual(dry_run.returncode, 0, dry_run.stdout + dry_run.stderr)
+        self.assertIn(".infra/bootstrap-update.toml", dry_run.stdout)
+        self.assertEqual(
+            config.read_text(),
+            'profiles = ["style-exceptions-default", "shared-default"]\n',
+        )
+
+        result = self.run_sync("--yes")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(config.read_text(), 'profiles = ["shared-default"]\n')
+        self.assertTrue((self.project / ".infra/config.toml").is_file())
+        self.assertEqual(self.run_sync("--check").returncode, 0)
+
+    def test_unknown_profile_is_still_rejected(self) -> None:
+        (self.project / ".infra").mkdir()
+        (self.project / ".infra/bootstrap-update.toml").write_text('profiles = ["unrecognized"]\n')
+        result = self.run_sync("--dry-run")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown bootstrap profile: unrecognized", result.stderr)
+
     def test_symlink_escape_is_rejected(self) -> None:
         outside = Path(self.temp.name) / "outside"
         outside.mkdir()

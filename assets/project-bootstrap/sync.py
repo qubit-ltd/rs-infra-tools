@@ -102,6 +102,15 @@ def load_manifest(package: Path) -> dict:
         safe_path(Path("/project-root"), target)
         if target == SNAPSHOT.as_posix():
             raise ValueError("cannot retire bootstrap snapshot")
+    deprecated_profiles = manifest.get("deprecated_profiles", [])
+    if (
+        not isinstance(deprecated_profiles, list)
+        or any(not isinstance(profile, str) or not profile for profile in deprecated_profiles)
+        or len(deprecated_profiles) != len(set(deprecated_profiles))
+    ):
+        raise ValueError("deprecated_profiles must be an array of unique profile names")
+    if set(deprecated_profiles) & set(manifest.get("profiles", {})):
+        raise ValueError("a profile cannot be both active and deprecated")
     return manifest
 
 
@@ -174,31 +183,56 @@ def config_entries(manifest: dict, checkout_root: Path, package_root: Path | Non
     return entries, versions
 
 
-def selected_entries(manifest: dict, project: Path) -> list[dict]:
-    entries = list(manifest["files"])
+def bootstrap_update_config(manifest: dict, project: Path) -> tuple[list[str], str | None, list[str]]:
+    """Read selected profiles and remove explicitly deprecated names in memory."""
     config = safe_path(project, ".infra/bootstrap-update.toml")
     if not config.exists():
-        return entries
+        return [], None, []
     if config.is_symlink() or not config.is_file():
         raise ValueError(".infra/bootstrap-update.toml must be a regular file")
-    profiles = []
-    for line in config.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#"):
+
+    original = config.read_text(encoding="utf-8")
+    lines = original.splitlines(keepends=True)
+    profiles: list[str] = []
+    deprecated = set(manifest.get("deprecated_profiles", []))
+    removed: list[str] = []
+    migrated_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            migrated_lines.append(line)
             continue
         key, separator, value = line.partition("=")
         if not separator or key.strip() != "profiles":
             raise ValueError("bootstrap-update.toml only supports the profiles array")
-        profiles = json.loads(value.strip())
-    if not isinstance(profiles, list) or any(not isinstance(name, str) for name in profiles):
-        raise ValueError("profiles must be an array of strings in bootstrap-update.toml")
+        parsed = json.loads(value.strip())
+        if not isinstance(parsed, list) or any(not isinstance(name, str) for name in parsed):
+            raise ValueError("profiles must be an array of strings in bootstrap-update.toml")
+        profiles = parsed
+        remaining = [name for name in parsed if name not in deprecated]
+        removed.extend(name for name in parsed if name in deprecated)
+        if len(remaining) != len(parsed):
+            indent = line[:len(line) - len(line.lstrip())]
+            newline = "\n" if line.endswith("\n") else ""
+            migrated_lines.append(f"{indent}profiles = {json.dumps(remaining)}{newline}")
+        else:
+            migrated_lines.append(line)
+
+    migrated = "".join(migrated_lines)
+    selected = [name for name in profiles if name not in deprecated]
+    return selected, migrated if migrated != original else None, list(dict.fromkeys(removed))
+
+
+def selected_entries(manifest: dict, project: Path, profiles: list[str] | None = None) -> list[dict]:
+    entries = list(manifest["files"])
+    if profiles is None:
+        profiles, _, _ = bootstrap_update_config(manifest, project)
     known = manifest.get("profiles", {})
     for name in profiles:
         if name not in known:
-            if name == "dependency-policy-default":
+            if name in manifest.get("deprecated_profiles", []):
                 raise ValueError(
-                    "obsolete bootstrap profile dependency-policy-default; remove it from "
-                    ".infra/bootstrap-update.toml (dependency policy is installed automatically)"
+                    f"obsolete bootstrap profile {name}; remove it from .infra/bootstrap-update.toml"
                 )
             raise ValueError(f"unknown bootstrap profile: {name}")
         entries.extend(known[name])
@@ -356,7 +390,13 @@ def main() -> int:
                 print("installed shared config snapshot matches")
                 return 0
             manifest = load_manifest(package)
-            entries = [] if args.configs_only else selected_entries(manifest, project)
+            if args.configs_only:
+                profiles, bootstrap_config_update, removed_profiles = [], None, []
+            else:
+                profiles, bootstrap_config_update, removed_profiles = bootstrap_update_config(manifest, project)
+                if removed_profiles:
+                    print("deprecated bootstrap profiles will be removed: " + ", ".join(removed_profiles))
+            entries = [] if args.configs_only else selected_entries(manifest, project, profiles)
             package_digest = package_state(package, manifest)
             with tempfile.TemporaryDirectory(prefix="rs-infra-config-") as checkout_directory:
                 external, config_versions = config_entries(manifest, Path(checkout_directory), package)
@@ -365,7 +405,7 @@ def main() -> int:
                 old_snapshot, drift = project_state(project)
                 if args.status:
                     current = old_snapshot.get("package_sha256")
-                    if current == package_digest and old_snapshot.get("config_sources", {}) == config_versions and not drift:
+                    if current == package_digest and old_snapshot.get("config_sources", {}) == config_versions and not drift and bootstrap_config_update is None:
                         print("bootstrap snapshot matches upstream package and shared config")
                         return 0
                     print(f"bootstrap package differs: installed={current or 'missing'} upstream={package_digest}")
@@ -373,6 +413,8 @@ def main() -> int:
                         print("shared config contents differ")
                     if drift:
                         print("locally modified or missing: " + ", ".join(drift))
+                    if bootstrap_config_update is not None:
+                        print("deprecated bootstrap profiles need cleanup")
                     return 1
 
                 conflicts = conflicting_targets(project, old_snapshot, drift, planned_sources)
@@ -430,6 +472,8 @@ def main() -> int:
                     or bool(snap_path.stat().st_mode & stat.S_IXUSR)
                 )
                 changed_targets = [entry["target"] for entry, _, _ in planned]
+                if bootstrap_config_update is not None:
+                    changed_targets.append(".infra/bootstrap-update.toml")
                 if snapshot_changed:
                     changed_targets.append(SNAPSHOT.as_posix())
                 if not changed_targets and not obsolete:
@@ -457,6 +501,17 @@ def main() -> int:
                             os.unlink(temp_name)
                 for path in obsolete:
                     path.unlink()
+                if bootstrap_config_update is not None:
+                    config_path = safe_path(project, ".infra/bootstrap-update.toml")
+                    fd, temp_name = tempfile.mkstemp(prefix=".infra-update-", dir=config_path.parent)
+                    try:
+                        with os.fdopen(fd, "w", encoding="utf-8", newline="") as stream:
+                            stream.write(bootstrap_config_update)
+                        os.chmod(temp_name, stat.S_IMODE(config_path.stat().st_mode))
+                        os.replace(temp_name, config_path)
+                    finally:
+                        if os.path.exists(temp_name):
+                            os.unlink(temp_name)
                 if snapshot_changed:
                     snap_path.parent.mkdir(parents=True, exist_ok=True)
                     snap_path.write_text(snapshot_data, encoding="utf-8")
