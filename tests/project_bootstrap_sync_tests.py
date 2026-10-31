@@ -118,18 +118,17 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.project / ".infra/tool.sh").exists())
 
-    def test_first_install_preserves_untracked_conflict_and_records_drift(self) -> None:
+    def test_first_install_overwrites_untracked_managed_target(self) -> None:
         target = self.project / ".infra/tool.sh"
         target.parent.mkdir()
         target.write_text("locally changed")
         result = self.run_sync("--yes")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("skipping locally modified managed files", result.stderr)
-        self.assertIn(".infra/tool.sh", result.stderr)
-        self.assertEqual(target.read_text(), "locally changed")
+        self.assertEqual(result.stderr.count("warning:"), 1)
+        self.assertEqual(target.read_text(), "#!/bin/sh\necho upstream\n")
         snapshot, drift = sync.project_state(self.project)
         self.assertIn(".infra/tool.sh", snapshot["files"])
-        self.assertEqual(drift, [".infra/tool.sh"])
+        self.assertFalse(drift)
 
     def test_first_install_accepts_identical_untracked_target(self) -> None:
         target = self.project / ".infra/tool.sh"
@@ -153,7 +152,7 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
         self.assertEqual(snapshot.read_text(), "{}\n")
         self.assertFalse((self.project / ".infra/tool.sh").exists())
 
-    def test_managed_drift_is_preserved_while_other_files_update(self) -> None:
+    def test_managed_drift_is_overwritten_and_other_files_update(self) -> None:
         installed = self.run_sync("--yes")
         self.assertEqual(installed.returncode, 0, installed.stderr)
         target = self.project / ".infra/tool.sh"
@@ -172,15 +171,30 @@ class ProjectBootstrapSyncTests(unittest.TestCase):
 
         result = self.run_sync("--yes")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn(".infra/tool.sh", result.stderr)
-        self.assertEqual(target.read_text(), "modified after installation")
+        self.assertEqual(result.stderr.count("warning:"), 1)
+        self.assertEqual(target.read_text(), "#!/bin/sh\necho upstream\n")
         cargo_updater = self.project / ".infra/bin/cargo-update.sh"
         self.assertEqual(cargo_updater.read_text(), "#!/bin/sh\necho cargo-update\n")
         self.assertTrue(cargo_updater.stat().st_mode & 0o100)
         self.assertNotEqual((self.project / ".infra/bootstrap-source.json").read_bytes(), snapshot_before)
         snapshot, drift = sync.project_state(self.project)
-        self.assertEqual(drift, [".infra/tool.sh"])
+        self.assertFalse(drift)
         self.assertIn(".infra/bin/cargo-update.sh", snapshot["files"])
+
+    def test_update_overwrites_modified_managed_file_but_preserves_unmanaged_file(self) -> None:
+        installed = self.run_sync("--yes")
+        self.assertEqual(installed.returncode, 0, installed.stderr)
+        managed = self.project / ".infra/tool.sh"
+        managed.write_text("local managed edit\n")
+        unmanaged = self.project / ".infra/custom.sh"
+        unmanaged.parent.mkdir(exist_ok=True)
+        unmanaged.write_text("project-owned\n")
+
+        updated = self.run_sync("--yes")
+        self.assertEqual(updated.returncode, 0, updated.stderr)
+        self.assertEqual(managed.read_text(), "#!/bin/sh\necho upstream\n")
+        self.assertEqual(unmanaged.read_text(), "project-owned\n")
+        self.assertFalse(sync.project_state(self.project)[1])
 
     def test_path_escape_and_duplicate_targets_are_rejected(self) -> None:
         manifest = self.package / "manifest.json"

@@ -280,32 +280,6 @@ def project_state(project: Path) -> tuple[dict, list[str]]:
     return snapshot, drift
 
 
-def conflicting_targets(
-    project: Path,
-    snapshot: dict,
-    drift: list[str],
-    planned_sources: list[tuple[dict, Path]],
-) -> list[str]:
-    """Return managed drift and untracked paths that would be overwritten."""
-    recorded = snapshot.get("files", {})
-    planned_targets = {entry["target"] for entry, _ in planned_sources}
-    conflicts = set(drift) & planned_targets
-    if not snapshot:
-        conflicts.discard(SNAPSHOT.as_posix())
-    for entry, source in planned_sources:
-        target = safe_path(project, entry["target"])
-        if not target.is_file():
-            continue
-        record = recorded.get(entry["target"])
-        if record is None:
-            same_content = digest(target.read_bytes()) == digest(source.read_bytes())
-            mode = bool(target.stat().st_mode & stat.S_IXUSR)
-            same_mode = executable_mode_matches(mode, entry["executable"])
-            if not same_content or not same_mode:
-                conflicts.add(entry["target"])
-    return sorted(conflicts)
-
-
 def obsolete_baselines(project: Path, snapshot: dict, current_targets: set[str]) -> list[Path]:
     """Find previous managed baselines that the current manifest no longer installs."""
     obsolete = []
@@ -417,12 +391,22 @@ def main() -> int:
                         print("deprecated bootstrap profiles need cleanup")
                     return 1
 
-                conflicts = conflicting_targets(project, old_snapshot, drift, planned_sources)
-                if conflicts:
-                    print("warning: skipping locally modified managed files; continuing with other updates:", file=sys.stderr)
-                    for target in conflicts:
-                        print(f"  {target}", file=sys.stderr)
-                conflicted_targets = set(conflicts)
+                locally_modified = []
+                for entry, source in planned_sources:
+                    target = safe_path(project, entry["target"])
+                    if not target.is_file():
+                        continue
+                    same_content = digest(target.read_bytes()) == digest(source.read_bytes())
+                    mode = bool(target.stat().st_mode & stat.S_IXUSR)
+                    same_mode = executable_mode_matches(mode, entry["executable"])
+                    if not same_content or not same_mode:
+                        locally_modified.append(entry["target"])
+                if locally_modified:
+                    print(
+                        "warning: overwriting local changes to remote-managed files: "
+                        + ", ".join(locally_modified),
+                        file=sys.stderr,
+                    )
 
                 if args.configs_only:
                     package_targets = {entry["target"] for entry in manifest["files"]}
@@ -446,8 +430,6 @@ def main() -> int:
                 obsolete.extend(retired_config_paths(project, manifest, old_snapshot, current_targets))
                 planned: list[tuple[dict, Path, bytes]] = []
                 for entry, source in planned_sources:
-                    if entry["target"] in conflicted_targets:
-                        continue
                     target = safe_path(project, entry["target"])
                     if target.exists() and not target.is_file():
                         raise ValueError(f"target is not a regular file: {entry['target']}")
