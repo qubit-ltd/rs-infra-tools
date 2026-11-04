@@ -66,6 +66,9 @@ enum Command {
         /// Project root whose configuration will be used later.
         #[arg(long, default_value = ".")]
         project: PathBuf,
+        /// Install the resolved analyzer and its identity into the project.
+        #[arg(long)]
+        install_style_analyzer: bool,
     },
 }
 
@@ -110,10 +113,52 @@ fn execute(command: Command) -> Result<i32> {
             Ok(code)
         }
         Command::Latest { project, tool, args } => runtime::run_latest(&project, &tool, &args),
-        Command::Prewarm { project } => {
-            runtime::prewarm(&project)?;
+        Command::Prewarm {
+            project,
+            install_style_analyzer,
+        } => {
+            if install_style_analyzer {
+                runtime::prewarm_with_style_analyzer(&project)?;
+            } else {
+                runtime::prewarm(&project)?;
+            }
             eprintln!("✅ rs-infra-tools: latest tool cache prepared");
             Ok(0)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::Parser;
+
+    use super::Cli;
+    use super::Command;
+
+    #[test]
+    fn test_prewarm_requires_explicit_project_install_flag() {
+        let ordinary = Cli::try_parse_from(["rs-infra-tools", "prewarm", "--project", "/project"]).unwrap();
+        assert!(matches!(
+            ordinary.command,
+            Command::Prewarm {
+                install_style_analyzer: false,
+                ..
+            }
+        ));
+        let install = Cli::try_parse_from([
+            "rs-infra-tools",
+            "prewarm",
+            "--project",
+            "/project",
+            "--install-style-analyzer",
+        ])
+        .unwrap();
+        assert!(matches!(
+            install.command,
+            Command::Prewarm {
+                install_style_analyzer: true,
+                ..
+            }
+        ));
     }
 }

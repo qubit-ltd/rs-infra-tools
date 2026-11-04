@@ -25,6 +25,10 @@ use fs2::FileExt;
 use sha2::Digest;
 use sha2::Sha256;
 
+// Publishes an explicitly selected analyzer into a project.
+#[path = "runtime/internal/style_install.rs"]
+mod style_install;
+
 const TOOLS: &[Tool] = &[
     Tool::new("rs-infra-ci", "rs-infra-ci", "qubit-infra-ci"),
     Tool::new("rs-infra-coverage", "rs-infra-coverage", "qubit-infra-coverage"),
@@ -172,6 +176,45 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
 /// Returns an error if revision lookup, cache preparation, or tool building
 /// fails.
 pub fn prewarm(_project: &Path) -> Result<()> {
+    prepare_tools()?;
+    Ok(())
+}
+
+/// Prepares the shared cache and installs its selected analyzer into a project.
+///
+/// # Parameters
+///
+/// * `project` - Existing project root receiving ignored analyzer artifacts.
+///
+/// # Returns
+///
+/// Returns `Ok(())` after the selected analyzer and matching identity metadata
+/// are published; the prepared tool set remains reusable in the shared cache.
+///
+/// # Errors
+///
+/// Returns an error when tool preparation, analyzer capability validation or
+/// safe project installation fails. Ordinary [`prewarm`] does not install
+/// files.
+pub fn prewarm_with_style_analyzer(project: &Path) -> Result<()> {
+    let resolved = prepare_tools()?;
+    let style = resolved
+        .iter()
+        .find(|item| item.tool.name == "rs-infra-style")
+        .context("prewarm did not resolve rs-infra-style")?;
+    style_install::install(project, &style.executable, &style.revision)
+}
+
+/// Resolves every supported tool and binds the complete invocation snapshot.
+///
+/// # Returns
+///
+/// Returns exact revisions and their shared-cache executables.
+///
+/// # Errors
+///
+/// Returns an error for lookup, cache, installation, or snapshot failures.
+fn prepare_tools() -> Result<Vec<ResolvedTool>> {
     let cache = cache_root()?.join("rs-infra");
     let host = host_target()?;
     let rustc_release = rustc_release()?;
@@ -198,7 +241,7 @@ pub fn prewarm(_project: &Path) -> Result<()> {
         });
     }
     let _ = invocation_bin_dir(&cache, &resolved)?;
-    Ok(())
+    Ok(resolved)
 }
 
 /// Locates the shared checkout or fetches the manager source into the tool
