@@ -34,6 +34,34 @@ rs-infra-tools latest --project . --tool rs-infra-style -- check
 rs-infra-tools prewarm --project .
 ```
 
+### 只读项目源码分析
+
+正常更新一次后，可以从任意工作目录调用项目入口：
+
+```bash
+./update-infra.sh
+./.infra/bin/style-analyze.sh
+./.infra/bin/style-analyze.sh --format json
+```
+
+更新器分发受管理的入口和 Python helper，并调用
+`prewarm --install-style-analyzer`，将本次解析出的原生可执行文件以及版本、SHA-256
+元数据安装到被忽略的 `.infra/style/` 路径。普通 `prewarm` 仍然只预热共享缓存。
+旧项目即使由更新前的 bootstrap 正在执行，也能在第一次更新后获得完整安装；
+兼容交接可能额外执行一次只预热缓存的操作，但不会重新构建已缓存的版本。
+
+入口枚举 Git 已跟踪和非忽略的未跟踪 Rust 文件，包含非默认 workspace 成员、
+独立 fuzz crate 和 fixture，排除 generated/vendor 目录以及构建、审查内部目录。
+源码清单在项目外创建，调用后删除。`--files-from` 指定 JSON 路径清单；
+`--standards`、`--repository-readme`、`--project` 对应原生分析范围。
+`--project` 改变被分析的目录，但原生安装仍取自入口所属项目，因此隔离审查 worker
+不必复制被忽略的二进制。显式设置 `RUST_STYLE_ANALYZER` 可以覆盖原生程序路径。
+
+分析不会更新基础设施、构建项目、格式化源码或运行 CI。安装缺失或元数据不匹配时
+报错并提示执行 `update-infra.sh`。退出码 `0` 表示机械检查完成且无确定违规，
+`1` 表示发现违规，`2` 表示分析不完整；语义规则仍需审查。
+既有 `style-check.sh` 和 CI 门禁行为保持不变。
+
 ### 本地平台检查
 
 manager 已登记 `rs-infra-platform`，Cargo 包名为 `qubit-infra-platform`，通过 GitHub 源码分发。在已迁移项目中，先更新受管理的引导文件，再调用平台工具：
@@ -56,7 +84,7 @@ cargo +1.94.0 run --manifest-path /path/to/rs-infra-platform/Cargo.toml --packag
 
 ## 能力与限制
 
-运行前会解析 `main` 的确切提交；同一全局缓存中的每个工具版本只编译一次，项目直接复用缓存的二进制和上游脚本，不会因更新工具而生成项目文件改动。缓存只在本机共享；独立 CI runner 若要跨任务复用编译结果，需要自行持久化该缓存目录。
+运行前会解析 `main` 的确切提交；同一全局缓存中的每个工具版本只编译一次，项目复用缓存的二进制和上游脚本。正常更新还会安装受管理、被忽略的项目 Analyzer 产物；普通 `prewarm` 不写入项目产物。缓存只在本机共享；独立 CI runner 若要跨任务复用编译结果，需要自行持久化该缓存目录。
 
 ## 延伸阅读
 

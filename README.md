@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![中文文档](https://img.shields.io/badge/文档-中文版-blue.svg)](README.zh_CN.md)
 
-Resolve, build, cache, and execute the latest `main` revisions of Qubit Rust infrastructure tools without submodules or per-project tool installations.
+Resolve, build, cache, and execute the latest `main` revisions of Qubit Rust infrastructure tools without submodules or repeated per-tool builds.
 
 ## Installation
 
@@ -40,6 +40,40 @@ rs-infra-tools latest --project . --tool rs-infra-style -- check
 rs-infra-tools prewarm --project .
 ```
 
+### Read-only project source analysis
+
+After one normal update, analyze the launcher project from any working directory:
+
+```bash
+./update-infra.sh
+./.infra/bin/style-analyze.sh
+./.infra/bin/style-analyze.sh --format json
+```
+
+The updater installs this managed launcher and Python helper, and calls
+`prewarm --install-style-analyzer` to publish the resolved native executable and
+revision/SHA-256 metadata in ignored `.infra/style/` paths. Ordinary `prewarm`
+remains a shared-cache-only operation. Existing projects also receive a usable
+installation in their first update, even when their already-running bootstrap
+predates the installation flag. That compatibility handoff may perform a second
+cache-only prewarm; it does not rebuild an already cached revision.
+
+The entry enumerates tracked and nonignored untracked Rust files, including
+nondefault workspace members, standalone fuzz crates, and fixtures. It excludes
+generated/vendor directories and build/review internals. Source lists are
+created outside the project and removed after invocation. `--files-from` uses an
+explicit JSON path list; `--standards`, `--repository-readme`, and `--project`
+forward the corresponding native scope. `--project` changes the analyzed tree
+while the native installation remains anchored to the launcher project, so a
+review worker need not contain the ignored executable. An explicit
+`RUST_STYLE_ANALYZER` overrides the native executable.
+
+Analysis does not update infrastructure, build project code, format source, or
+run CI. Missing or mismatched installation metadata reports an error and asks
+for `update-infra.sh`. Exit codes are `0` for completed mechanical checks without
+proved violations, `1` for violations, and `2` for incomplete analysis. Semantic
+review is still required. Existing `style-check.sh` and CI gate behavior is unchanged.
+
 ### Local platform checks
 
 The manager registers `rs-infra-platform` (Cargo package `qubit-infra-platform`) and distributes it from its GitHub source. In a migrated project, update the managed bootstrap before invoking the platform tool:
@@ -61,7 +95,7 @@ Both `rs-infra-tools prewarm` and manager invocations of `rs-infra-ci` resolve e
 
 ## Capabilities and limitations
 
-The tool resolves exact `main` commits before using cached tools, compiles each revision once per shared cache, and runs cached upstream scripts without writing generated files into consuming projects. Local caches are host-local; independent CI runners need their own cache persistence to share build results across jobs.
+The tool resolves exact `main` commits before using cached tools, compiles each revision once per shared cache, and runs cached upstream scripts. Normal updates additionally install the managed, ignored project Analyzer artifact; plain `prewarm` does not write project artifacts. Local caches are host-local; independent CI runners need their own cache persistence to share build results across jobs.
 
 ## Learn More
 

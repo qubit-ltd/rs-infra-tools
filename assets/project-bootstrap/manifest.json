@@ -100,6 +100,21 @@
       "source": "files/update-infra.sh",
       "target": "update-infra.sh",
       "executable": true
+    },
+    {
+      "source": "files/.infra/bin/style-analyze.sh",
+      "target": ".infra/bin/style-analyze.sh",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/lib/style_analyze.py",
+      "target": ".infra/lib/style_analyze.py",
+      "executable": true
+    },
+    {
+      "source": "files/.infra/style/.gitignore",
+      "target": ".infra/style/.gitignore",
+      "executable": false
     }
   ],
   "profiles": {

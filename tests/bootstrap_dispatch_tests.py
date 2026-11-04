@@ -78,8 +78,8 @@ class BootstrapDispatchTests(unittest.TestCase):
                     else:
                         self.assertTrue(cargo_log.is_file())
                         self.assertEqual(
-                            cargo_log.read_text().splitlines()[-4:],
-                            ["--", "prewarm", "--project", str(project)],
+                            cargo_log.read_text().splitlines()[-5:],
+                            ["--", "prewarm", "--project", str(project), "--install-style-analyzer"],
                         )
 
     def test_stable_update_script_delegates_existing_project_to_bootstrap(self) -> None:
@@ -210,14 +210,16 @@ class BootstrapDispatchTests(unittest.TestCase):
                         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                         self.assertEqual(
                             call_log.read_text().splitlines(),
-                            ["--project-root", str(project), "--package-root", str(package), *option],
+                            ["--project-root", str(project), "--package-root", str(package),
+                             *(["--defer-style-analyzer-install"] if bootstrap == BOOTSTRAP else []), *option],
                         )
                         if "--dry-run" in option or "--status" in option:
                             self.assertFalse(prewarm_log.exists())
                         else:
                             self.assertEqual(
                                 prewarm_log.read_text().splitlines(),
-                                ["prewarm", "--project", str(project)],
+                                ["prewarm", "--project", str(project),
+                                 *(["--install-style-analyzer"] if bootstrap == BOOTSTRAP and "--configs-only" not in option else [])],
                             )
 
     def test_infra_tool_wrapper_runs_cached_platform_binary(self) -> None:

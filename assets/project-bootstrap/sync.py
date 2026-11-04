@@ -341,11 +341,35 @@ def cleanup_downloaded_package() -> None:
         print(f"warning: unable to clean bootstrap download {root}: {error}", file=sys.stderr)
 
 
+def install_analyzer_for_legacy_bootstrap(project: Path, package: Path, package_files: dict, args) -> None:
+    """Complete one-step upgrades whose already-running bootstrap predates Analyzer installation."""
+    required = {".infra/bin/style-analyze.sh", ".infra/lib/style_analyze.py", ".infra/style/.gitignore"}
+    if (args.defer_style_analyzer_install or args.configs_only or args.dry_run or args.status
+            or not required.issubset(package_files)):
+        return
+    runner = os.environ.get("RS_INFRA_TOOLS_BIN")
+    if not runner:
+        # Fresh initialization builds the manager after sync, then explicitly
+        # requests installation. Direct sync remains a file-only operation.
+        return
+    shared = os.environ.get("RS_INFRA_SHARED_ROOT")
+    supplied_project = os.environ.get("RS_INFRA_PROJECT_ROOT")
+    if (not shared or (Path(shared) / "assets/project-bootstrap").resolve() != package
+            or not supplied_project or Path(supplied_project).resolve() != project):
+        raise ValueError("Analyzer install hook requires the matching bootstrap runtime context")
+    executable = Path(runner)
+    if not executable.is_file() or not os.access(executable, os.X_OK):
+        raise ValueError("Analyzer install hook cannot execute the bootstrap tool manager")
+    subprocess.run([str(executable), "prewarm", "--project", str(project),
+                    "--install-style-analyzer"], check=True)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project-root", type=Path, required=True)
     parser.add_argument("--package-root", type=Path, default=Path(__file__).resolve().parent)
     parser.add_argument("--configs-only", action="store_true", help="install shared config without replacing project bootstrap scripts")
+    parser.add_argument("--defer-style-analyzer-install", action="store_true", help=argparse.SUPPRESS)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--yes", action="store_true", help="accepted for compatibility; updates do not prompt")
     modes.add_argument("--dry-run", action="store_true", help="list targets without writing")
@@ -462,6 +486,7 @@ def main() -> int:
                     changed_targets.append(SNAPSHOT.as_posix())
                 if not changed_targets and not obsolete:
                     print("bootstrap files are already up to date")
+                    install_analyzer_for_legacy_bootstrap(project, package, package_files, args)
                     return 0
 
                 print(f"rs-infra-tools {source_revision} will update {len(changed_targets)} paths:")
@@ -501,6 +526,7 @@ def main() -> int:
                     snap_path.write_text(snapshot_data, encoding="utf-8")
                     os.chmod(snap_path, 0o644)
                 print("bootstrap files updated")
+                install_analyzer_for_legacy_bootstrap(project, package, package_files, args)
                 return 0
         except (OSError, ValueError, json.JSONDecodeError, subprocess.CalledProcessError) as error:
             print(f"error: {error}", file=sys.stderr)
