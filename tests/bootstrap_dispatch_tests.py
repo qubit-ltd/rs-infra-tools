@@ -423,7 +423,7 @@ class BootstrapDispatchTests(unittest.TestCase):
             shared_bin.mkdir(parents=True)
             for entrypoint in (
                 "align-ci", "ci-check", "coverage", "dependency-update",
-                "infra-tool", "prepare-local-path-dependencies",
+                "infra-tool", "prepare-local-path-dependencies", "update-dependencies-by-prefix",
                 "project-ci-check", "style-check",
             ):
                 shared_entrypoint = shared_bin / f"{entrypoint}.sh"
@@ -497,14 +497,19 @@ class BootstrapDispatchTests(unittest.TestCase):
                 "ci-check": ["latest", "--project", str(project), "--tool", "rs-infra-ci", "--", "--project", str(project), "--dry-run", "check"],
                 "coverage": ["latest", "--project", str(project), "--tool", "rs-infra-coverage", "--", "--project", str(project), "collect", "--dry-run"],
                 "style-check": ["latest", "--project", str(project), "--tool", "rs-infra-style", "--", "--project", str(project), "check", "--dry-run"],
+                "update-dependencies-by-prefix": [
+                    "latest", "--project", str(project), "--tool", "rs-infra-dependency", "--",
+                    "--project", str(project), "update-prefix", "--prefix", "qubit-", "--dry-run",
+                ],
             }
             for entrypoint, expected in cases.items():
                 call_log.unlink(missing_ok=True)
                 if entrypoint == "ci-check":
                     (project / "target").mkdir(parents=True, exist_ok=True)
                     (project / "target/ci-artifact").touch()
+                arguments = ["--prefix", "qubit-", "--dry-run"] if entrypoint == "update-dependencies-by-prefix" else ["--dry-run"]
                 result = subprocess.run(
-                    ["bash", str(project_bootstrap), f".infra/bin/{entrypoint}.sh", "--dry-run"],
+                    ["bash", str(project_bootstrap), f".infra/bin/{entrypoint}.sh", *arguments],
                     env=env,
                     text=True,
                     capture_output=True,
@@ -512,7 +517,7 @@ class BootstrapDispatchTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, f"{entrypoint}: {result.stdout}{result.stderr}")
                 expected_log = expected
-                if entrypoint in {"align-ci", "ci-check", "coverage", "style-check"}:
+                if entrypoint in {"align-ci", "ci-check", "coverage", "style-check", "update-dependencies-by-prefix"}:
                     expected_log = ["prepare-local-path-dependencies", *expected]
                 if entrypoint == "coverage":
                     expected_log.append("coverage-report")

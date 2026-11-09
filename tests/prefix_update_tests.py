@@ -10,56 +10,42 @@ import unittest
 SCRIPT = Path(__file__).resolve().parents[1] / "assets/project-bootstrap/files/.infra/bin/update-dependencies-by-prefix.sh"
 
 
-class PrefixUpdateTests(unittest.TestCase):
-    def test_dry_run_updates_nested_manifest(self) -> None:
+class PrefixUpdateWrapperTests(unittest.TestCase):
+    def test_wrapper_passes_arguments_to_project_bootstrap(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             project = root / "project"
-            nested = project / "fuzz"
-            bin_dir = root / "bin"
-            nested.mkdir(parents=True)
-            bin_dir.mkdir()
-            (project / "Cargo.toml").write_text(
-                '[package]\nname = "root-crate"\nversion = "0.1.0"\nedition = "2021"\n'
-                '[lib]\npath = "src.rs"\n'
+            bin_dir = project / ".infra" / "bin"
+            bin_dir.mkdir(parents=True)
+            wrapper = bin_dir / "update-dependencies-by-prefix.sh"
+            wrapper.write_bytes(SCRIPT.read_bytes())
+            wrapper.chmod(0o755)
+            call_log = root / "bootstrap-args.log"
+            bootstrap = project / ".infra" / "bootstrap.sh"
+            bootstrap.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -euo pipefail\n"
+                'printf "%s\\n" "$@" > "$BOOTSTRAP_ARGS_LOG"\n'
             )
-            (nested / "Cargo.toml").write_text(
-                '[package]\nname = "fuzz-crate"\nversion = "0.1.0"\nedition = "2021"\n'
-                '[workspace]\n[lib]\npath = "src.rs"\n[dependencies]\nserde = "1.0"\n'
-            )
-            (project / "src.rs").write_text("")
-            (nested / "src.rs").write_text("")
-            (bin_dir / "cargo").write_text(
-                '#!/usr/bin/env bash\n'
-                'if [[ "$1" == add ]]; then\n'
-                '  if [[ "${2:-}" == --help ]]; then exit 0; fi\n'
-                '  printf "%s\\n" "$*" >> "$CARGO_ADD_LOG"\n'
-                'else\n'
-                '  exec "$REAL_CARGO" "$@"\n'
-                'fi\n'
-            )
-            (bin_dir / "curl").write_text(
-                '#!/usr/bin/env bash\n'
-                'printf "{\\"crate\\":{\\"max_stable_version\\":\\"1.2.3\\"}}\\n"\n'
-            )
-            for command in ("cargo", "curl"):
-                (bin_dir / command).chmod(0o755)
-            log = root / "cargo-add.log"
-            env = os.environ.copy()
-            env.update(
-                PATH=f"{bin_dir}:{env['PATH']}",
-                REAL_CARGO=subprocess.check_output(["which", "cargo"], text=True).strip(),
-                CARGO_ADD_LOG=str(log),
-            )
+            bootstrap.chmod(0o755)
             result = subprocess.run(
-                ["bash", str(SCRIPT), "--project", str(project), "--prefix", "ser", "--dry-run"],
-                env=env,
+                ["bash", str(wrapper), "--prefix", "qubit-", "--prefix", "rs-", "--dry-run"],
+                env={**os.environ, "BOOTSTRAP_ARGS_LOG": str(call_log)},
                 text=True,
                 capture_output=True,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertTrue(log.exists(), result.stdout)
-            self.assertIn(f"--manifest-path {nested / 'Cargo.toml'}", log.read_text())
+            self.assertEqual(
+                call_log.read_text().splitlines(),
+                [
+                    ".infra/bin/update-dependencies-by-prefix.sh",
+                    "--prefix",
+                    "qubit-",
+                    "--prefix",
+                    "rs-",
+                    "--dry-run",
+                ],
+            )
 
 
 if __name__ == "__main__":
