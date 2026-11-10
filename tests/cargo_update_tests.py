@@ -11,6 +11,55 @@ SCRIPT = Path(__file__).resolve().parents[1] / "assets/project-bootstrap/files/.
 
 
 class CargoUpdateTests(unittest.TestCase):
+    def test_skips_fixture_packages_excluded_from_parent_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "project"
+            script = root / ".infra/bin/cargo-update.sh"
+            excluded_fixture = root / "tests/fixtures/excluded"
+            later_fixture = root / "tests/fixtures/later/src"
+            bin_dir = Path(directory) / "bin"
+            for path in (script.parent, root / "src", excluded_fixture / "src", later_fixture, bin_dir):
+                path.mkdir(parents=True)
+
+            (root / "Cargo.toml").write_text(
+                '[package]\nname = "root-crate"\nversion = "0.1.0"\nedition = "2024"\n'
+                '[workspace]\n'
+            )
+            (root / "src/lib.rs").write_text("")
+            (excluded_fixture / "Cargo.toml").write_text(
+                '[package]\nname = "excluded-fixture"\nversion = "0.1.0"\nedition = "2024"\n'
+            )
+            (excluded_fixture / "src/lib.rs").write_text("")
+            (later_fixture.parent / "Cargo.toml").write_text(
+                '[package]\nname = "later-fixture"\nversion = "0.1.0"\nedition = "2024"\n[workspace]\n'
+            )
+            (later_fixture / "lib.rs").write_text("")
+
+            script.write_bytes(SCRIPT.read_bytes())
+            script.chmod(0o755)
+            cargo = bin_dir / "cargo"
+            cargo.write_text(
+                '#!/usr/bin/env bash\n'
+                'printf "%s\\n" "$*" >> "$CARGO_UPDATE_LOG"\n'
+                'if [[ "$*" == *"excluded/Cargo.toml" ]]; then\n'
+                '  echo "error: current package believes it\'s in a workspace when it\'s not" >&2\n'
+                '  exit 101\n'
+                'fi\n'
+            )
+            cargo.chmod(0o755)
+
+            log = Path(directory) / "cargo-update.log"
+            env = os.environ.copy()
+            env.update(PATH=f"{bin_dir}:{env['PATH']}", CARGO_UPDATE_LOG=str(log))
+            result = subprocess.run(["bash", str(script)], env=env, text=True, capture_output=True)
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = log.read_text().splitlines()
+            self.assertEqual(len(calls), 3, calls)
+            self.assertTrue(any("excluded/Cargo.toml" in call for call in calls), calls)
+            self.assertTrue(any("later/Cargo.toml" in call for call in calls), calls)
+            self.assertIn("Skipping Cargo manifest outside its workspace", result.stdout)
+
     def test_scans_fixtures_and_skips_manifests_without_targets(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory) / "project"
