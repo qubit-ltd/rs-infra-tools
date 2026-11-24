@@ -132,6 +132,108 @@ fn test_destination_created_at_publish_time_is_preserved() {
     assert_no_staging_artifacts(directory.path(), "dependency");
 }
 
+#[test]
+fn test_nested_plain_directory_is_not_accepted_as_a_dependency_checkout() {
+    let directory = tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    let parent_repo = directory.path().join("parent-repo");
+    let nested = parent_repo.join("dependency");
+    let bin = directory.path().join("bin");
+    fs::create_dir_all(project.join(".infra/ci")).expect("project CI directory");
+    fs::create_dir_all(parent_repo.join(".git")).expect("parent repo marker");
+    fs::create_dir_all(&nested).expect("nested ordinary directory");
+    fs::create_dir_all(&bin).expect("mock command directory");
+    write_config(&project, "../parent-repo/dependency", "/mock/dependency.git", REVISION);
+    install_mock_git(&bin);
+
+    let script = helper_script();
+    let prepare = run_helper(&script, &project, &bin, REVISION, &[], &[]);
+    assert!(!prepare.status.success());
+    assert!(String::from_utf8_lossy(&prepare.stderr).contains("refusing to replace existing dependency path"));
+    assert!(!nested.join("fixture.txt").exists());
+
+    let locked = run_helper(&script, &project, &bin, REVISION, &["--check-locked"], &[]);
+    assert!(!locked.status.success());
+    assert!(String::from_utf8_lossy(&locked.stderr).contains("is not a Git checkout root"));
+}
+
+#[test]
+fn test_linked_worktree_git_pointer_is_accepted() {
+    let directory = tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    let checkout = directory.path().join("dependency");
+    let bin = directory.path().join("bin");
+    fs::create_dir_all(project.join(".infra/ci")).expect("project CI directory");
+    fs::create_dir_all(&checkout).expect("linked checkout");
+    fs::write(checkout.join(".git"), "gitdir: /mock/worktrees/dependency\n").expect("git pointer");
+    fs::write(checkout.join("fixture.txt"), "linked source\n").expect("fixture");
+    fs::create_dir_all(&bin).expect("mock command directory");
+    write_config(&project, "../dependency", "/mock/dependency.git", REVISION);
+    install_mock_git(&bin);
+
+    let output = run_helper(&helper_script(), &project, &bin, REVISION, &["--check-locked"], &[]);
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+}
+
+#[test]
+fn test_two_helpers_racing_to_publish_have_one_winner() {
+    let directory = tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    let bin = directory.path().join("bin");
+    let barrier = directory.path().join("fetch-barrier");
+    fs::create_dir_all(project.join(".infra/ci")).expect("project CI directory");
+    fs::create_dir_all(&bin).expect("mock command directory");
+    fs::create_dir_all(&barrier).expect("fetch barrier");
+    write_config(&project, "../dependency", "/mock/dependency.git", REVISION);
+    install_mock_git(&bin);
+
+    let script = helper_script();
+    let children = (0..2)
+        .map(|_| {
+            let mut command = Command::new("bash");
+            command
+                .arg(&script)
+                .env("PATH", prepend_path(&bin))
+                .env("MOCK_GIT_HEAD", REVISION)
+                .env("MOCK_GIT_BARRIER_DIR", &barrier)
+                .env("RS_INFRA_PROJECT_ROOT", &project)
+                .env("RS_INFRA_SHARED_ROOT", env!("CARGO_MANIFEST_DIR"))
+                .env("RS_INFRA_CLEANUP_OWNER_PID", "test")
+                .env("RS_INFRA_NETWORK_MAX_ATTEMPTS", "1")
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .spawn()
+                .expect("spawn dependency preparation helper")
+        })
+        .collect::<Vec<_>>();
+    let outputs = children
+        .into_iter()
+        .map(|child| child.wait_with_output().expect("wait for helper"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        fs::read_dir(&barrier).unwrap().count(),
+        2,
+        "both helpers reached the synchronized fetch"
+    );
+    assert_eq!(outputs.iter().filter(|output| output.status.success()).count(), 1);
+    assert_eq!(outputs.iter().filter(|output| !output.status.success()).count(), 1);
+    let failed = outputs.iter().find(|output| !output.status.success()).unwrap();
+    let error = String::from_utf8_lossy(&failed.stderr);
+    assert!(
+        error.contains("another dependency preparation is publishing")
+            || error.contains("refusing to replace existing dependency path"),
+        "unexpected losing helper error (status {}): stdout={} stderr={}",
+        failed.status,
+        String::from_utf8_lossy(&failed.stdout),
+        error
+    );
+    assert_eq!(
+        fs::read_to_string(directory.path().join("dependency/fixture.txt")).unwrap(),
+        "mock source\n"
+    );
+    assert_no_staging_artifacts(directory.path(), "dependency");
+}
+
 fn helper_script() -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(".infra/lib/prepare-local-path-dependencies.sh")
 }
@@ -184,8 +286,24 @@ if [[ "$*" == *" fetch "* && -n "${MOCK_GIT_FAIL_FETCH_ONCE:-}" && ! -e "$MOCK_G
     echo 'simulated fetch failure' >&2
     exit 31
 fi
+if [[ "$*" == *" fetch "* && -n "${MOCK_GIT_BARRIER_DIR:-}" ]]; then
+    checkout=
+    previous=
+    for argument in "$@"; do
+        if [[ "$previous" == -C ]]; then checkout=$argument; fi
+        previous=$argument
+    done
+    touch "$MOCK_GIT_BARRIER_DIR/${checkout##*/}"
+    while :; do
+        count=0
+        for marker in "$MOCK_GIT_BARRIER_DIR"/*; do [[ -e "$marker" ]] && ((count += 1)); done
+        (( count >= 2 )) && break
+        sleep 0.01
+    done
+fi
 if [[ "$1" == init ]]; then
     mkdir -p "$2"
+    mkdir -p "$2/.git"
     printf 'mock source\n' > "$2/fixture.txt"
     exit 0
 fi
@@ -195,6 +313,12 @@ if [[ "$1" == -C ]]; then
     case "$1" in
         remote|checkout) exit 0 ;;
         rev-parse)
+            if [[ "${2:-}" == --show-toplevel ]]; then
+                cursor=$checkout
+                while [[ "$cursor" != / && ! -e "$cursor/.git" ]]; do cursor=$(dirname "$cursor"); done
+                printf '%s\n' "$cursor"
+                exit 0
+            fi
             [[ -f "$checkout/fixture.txt" ]] || exit 128
             printf '%s\n' "$MOCK_GIT_HEAD"
             exit 0
@@ -217,7 +341,7 @@ fn install_racing_mv(bin: &Path) {
     assert!(real_mv.status.success());
     let real_mv = String::from_utf8(real_mv.stdout).unwrap().trim().to_owned();
     let script = format!(
-        "#!/usr/bin/env bash\nif [[ \"$1\" == --help ]]; then echo 'usage: mv [-n] SOURCE DEST'; exit 0; fi\nif [[ \"$*\" == *\"-n \"* ]]; then mkdir \"$3\"; printf 'keep me\\n' > \"$3/marker\"; fi\nexec '{}' \"$@\"\n",
+        "#!/usr/bin/env bash\nif [[ \"$1\" == --help ]]; then echo 'usage: mv -T -n SOURCE DEST'; exit 0; fi\nif [[ \"$*\" == *\"-Tn \"* ]]; then mkdir \"$3\"; printf 'keep me\\n' > \"$3/marker\"; fi\nexec '{}' \"$@\"\n",
         real_mv
     );
     write_executable(&bin.join("mv"), &script);

@@ -18,6 +18,25 @@ if [[ ! -f "$config" ]]; then
     exit 1
 fi
 
+# Pick an exact-destination, no-clobber rename implementation. BSD mv has no
+# equivalent of GNU -T, so do not use its directory-merge behavior as fallback.
+publish_mv=
+for candidate in mv gmv; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" --help 2>&1 | grep -q -- ' -T'; then
+        publish_mv=$candidate
+        break
+    fi
+done
+
+is_checkout_root() {
+    local candidate_root git_root
+    [[ -d "$1" && ( -d "$1/.git" || -f "$1/.git" ) ]] || return 1
+    candidate_root=$(cd "$1" 2>/dev/null && pwd -P) || return 1
+    git_root=$(git -C "$candidate_root" rev-parse --show-toplevel 2>/dev/null) || return 1
+    git_root=$(cd "$git_root" 2>/dev/null && pwd -P) || return 1
+    [[ "$candidate_root" == "$git_root" ]]
+}
+
 while IFS=$'\t' read -r relative_path repository_url revision; do
     [[ -z "$relative_path" || "$relative_path" == \#* ]] && continue
     revision=${revision%$'\r'}
@@ -31,6 +50,10 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
     if [[ "$mode" == --check-locked ]]; then
         if [[ ! -e "$target" ]]; then
             echo "error: locked dependency '$relative_path' is missing (expected $revision)" >&2
+            exit 1
+        fi
+        if ! is_checkout_root "$target"; then
+            echo "error: locked dependency '$relative_path' is not a Git checkout root (expected $revision)" >&2
             exit 1
         fi
         actual_revision=$(git -C "$target" rev-parse HEAD 2>&1) || {
@@ -55,7 +78,7 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
         fi
         continue
     fi
-    if [[ -e "$target" ]] && actual_revision=$(git -C "$target" rev-parse HEAD 2>&1); then
+    if is_checkout_root "$target" && actual_revision=$(git -C "$target" rev-parse HEAD 2>&1); then
         if [[ "$revision" =~ ^[[:xdigit:]]{40}$ && "$actual_revision" != "$revision" ]]; then
             echo "error: existing dependency '$relative_path' HEAD mismatch: actual $actual_revision; expected $revision" >&2
             exit 1
@@ -65,6 +88,11 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
         echo "error: refusing to replace existing dependency path '$relative_path'" >&2
         exit 1
     fi
+
+    [[ -n "$publish_mv" ]] || {
+        echo "error: preparing missing dependency '$relative_path' requires GNU mv with -T -n or gmv; install coreutils and retry" >&2
+        exit 1
+    }
 
     parent=$(dirname "$target")
     name=$(basename "$target")
@@ -124,18 +152,10 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
         exit 1
     fi
     move_status=0
-    if mv --help 2>&1 | grep -q -- ' -T'; then
-        if mv -Tn "$checkout" "$target"; then
-            :
-        else
-            move_status=$?
-        fi
+    if "$publish_mv" -Tn "$checkout" "$target"; then
+        :
     else
-        if mv -n "$checkout" "$target"; then
-            :
-        else
-            move_status=$?
-        fi
+        move_status=$?
     fi
     if [[ -e "$checkout" || -L "$checkout" ]]; then
         if [[ -e "$target" || -L "$target" ]]; then
@@ -143,12 +163,6 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
         else
             echo "error: failed to publish dependency path '$relative_path'" >&2
         fi
-        exit 1
-    fi
-    nested_checkout="$target/$(basename "$checkout")"
-    if [[ -e "$nested_checkout" || -L "$nested_checkout" ]]; then
-        rm -rf "$nested_checkout"
-        echo "error: dependency path '$relative_path' appeared during publication; preserving it" >&2
         exit 1
     fi
     if (( move_status != 0 )); then
