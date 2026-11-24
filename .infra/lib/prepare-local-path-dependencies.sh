@@ -27,6 +27,13 @@ for candidate in mv gmv; do
         break
     fi
 done
+publish_python=
+if [[ -z "$publish_mv" && "$(uname -s)" == Darwin ]]; then
+    candidate_python=${RS_INFRA_PYTHON:-python3}
+    if command -v "$candidate_python" >/dev/null 2>&1; then
+        publish_python=$candidate_python
+    fi
+fi
 
 is_checkout_root() {
     local candidate_root git_root
@@ -85,8 +92,8 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
         exit 1
     fi
 
-    [[ -n "$publish_mv" ]] || {
-        echo "error: preparing missing dependency '$relative_path' requires GNU mv with -T -n or gmv; install coreutils and retry" >&2
+    [[ -n "$publish_mv" || -n "$publish_python" ]] || {
+        echo "error: preparing missing dependency '$relative_path' requires GNU mv with -T -n or gmv, or Darwin renamex_np with Python 3" >&2
         exit 1
     }
 
@@ -148,21 +155,43 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
         exit 1
     fi
     move_status=0
-    if "$publish_mv" -Tn "$checkout" "$target"; then
-        :
+    if [[ -n "$publish_mv" ]]; then
+        if "$publish_mv" -Tn "$checkout" "$target"; then
+            :
+        else
+            move_status=$?
+        fi
     else
-        move_status=$?
+        if "$publish_python" -c 'import ctypes, errno, os, sys
+source, destination = sys.argv[1:]
+renamex_np = ctypes.CDLL(None, use_errno=True).renamex_np
+renamex_np.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint)
+renamex_np.restype = ctypes.c_int
+result = renamex_np(os.fsencode(source), os.fsencode(destination), 0x00000004)
+if result != 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error), destination)' "$checkout" "$target"; then
+            :
+        else
+            move_status=$?
+        fi
     fi
     if [[ -e "$checkout" || -L "$checkout" ]]; then
         if [[ -e "$target" || -L "$target" ]]; then
             echo "error: dependency path '$relative_path' appeared during publication; preserving it" >&2
+        elif (( move_status != 0 )); then
+            publisher=mv
+            [[ -n "$publish_mv" ]] || publisher=Darwin\ renamex_np
+            echo "error: failed to publish dependency path '$relative_path' ($publisher exit $move_status)" >&2
         else
             echo "error: failed to publish dependency path '$relative_path'" >&2
         fi
         exit 1
     fi
     if (( move_status != 0 )); then
-        echo "error: failed to publish dependency path '$relative_path' (mv exit $move_status)" >&2
+        publisher=mv
+        [[ -n "$publish_mv" ]] || publisher=Darwin\ renamex_np
+        echo "error: failed to publish dependency path '$relative_path' ($publisher exit $move_status)" >&2
         exit 1
     fi
 

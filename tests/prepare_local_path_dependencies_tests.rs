@@ -26,7 +26,11 @@ fn test_local_path_dependencies_are_pinned_and_strictly_checked() {
 
     let script = helper_script();
     let output = run_helper(&script, &project, &bin, REVISION, &[], &[]);
-    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     let checkout = directory.path().join("dependency");
     assert_eq!(
@@ -122,7 +126,10 @@ fn test_destination_created_at_publish_time_is_preserved() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stderr).contains("appeared during publication; preserving it"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("appeared during publication; preserving it")
+    );
 
     let target = directory.path().join("dependency");
     assert_eq!(fs::read_to_string(target.join("marker")).unwrap(), "keep me\n");
@@ -131,6 +138,127 @@ fn test_destination_created_at_publish_time_is_preserved() {
         .map(|entry| entry.unwrap().file_name())
         .collect::<Vec<_>>();
     assert_eq!(target_entries, [std::ffi::OsString::from("marker")]);
+    assert_no_staging_artifacts(directory.path(), "dependency");
+}
+
+#[test]
+fn test_darwin_rename_fallback_publishes_and_cleans_staging() {
+    let directory = tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    let bin = directory.path().join("bin");
+    fs::create_dir_all(project.join(".infra/ci")).expect("project CI directory");
+    fs::create_dir_all(&bin).expect("mock command directory");
+    write_config(&project, "../dependency", "/mock/dependency.git", REVISION);
+    install_mock_git(&bin);
+    install_darwin_publish_tools(&bin);
+
+    let output = run_helper(
+        &helper_script(),
+        &project,
+        &bin,
+        REVISION,
+        &[],
+        &[
+            ("MOCK_DARWIN_RENAME", std::ffi::OsStr::new("success")),
+            ("RS_INFRA_PYTHON", std::ffi::OsStr::new("mock-python3")),
+        ],
+    );
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(
+        fs::read_to_string(directory.path().join("dependency/fixture.txt")).unwrap(),
+        "mock source\n"
+    );
+    assert_no_staging_artifacts(directory.path(), "dependency");
+}
+
+#[test]
+fn test_darwin_rename_fallback_preserves_competing_destination() {
+    let directory = tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    let bin = directory.path().join("bin");
+    fs::create_dir_all(project.join(".infra/ci")).expect("project CI directory");
+    fs::create_dir_all(&bin).expect("mock command directory");
+    write_config(&project, "../dependency", "/mock/dependency.git", REVISION);
+    install_mock_git(&bin);
+    install_darwin_publish_tools(&bin);
+
+    let output = run_helper(
+        &helper_script(),
+        &project,
+        &bin,
+        REVISION,
+        &[],
+        &[
+            ("MOCK_DARWIN_RENAME", std::ffi::OsStr::new("race")),
+            ("RS_INFRA_PYTHON", std::ffi::OsStr::new("mock-python3")),
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("appeared during publication; preserving it"));
+    assert_eq!(
+        fs::read_to_string(directory.path().join("dependency/marker")).unwrap(),
+        "keep me\n"
+    );
+    assert_no_staging_artifacts(directory.path(), "dependency");
+}
+
+#[test]
+fn test_darwin_rename_native_error_cleans_staging() {
+    let directory = tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    let bin = directory.path().join("bin");
+    fs::create_dir_all(project.join(".infra/ci")).expect("project CI directory");
+    fs::create_dir_all(&bin).expect("mock command directory");
+    write_config(&project, "../dependency", "/mock/dependency.git", REVISION);
+    install_mock_git(&bin);
+    install_darwin_publish_tools(&bin);
+
+    let output = run_helper(
+        &helper_script(),
+        &project,
+        &bin,
+        REVISION,
+        &[],
+        &[
+            ("MOCK_DARWIN_RENAME", std::ffi::OsStr::new("error")),
+            ("RS_INFRA_PYTHON", std::ffi::OsStr::new("mock-python3")),
+        ],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("failed to publish dependency path '../dependency' (Darwin renamex_np exit 18)")
+    );
+    assert!(!directory.path().join("dependency").exists());
+    assert_no_staging_artifacts(directory.path(), "dependency");
+}
+
+#[test]
+fn test_missing_safe_publish_tools_fail_before_fetching() {
+    let directory = tempdir().expect("temporary directory");
+    let project = directory.path().join("project");
+    let bin = directory.path().join("bin");
+    fs::create_dir_all(project.join(".infra/ci")).expect("project CI directory");
+    fs::create_dir_all(&bin).expect("mock command directory");
+    write_config(&project, "../dependency", "/mock/dependency.git", REVISION);
+    install_mock_git(&bin);
+    install_bsd_mv_mocks(&bin);
+
+    let output = run_helper(
+        &helper_script(),
+        &project,
+        &bin,
+        REVISION,
+        &[],
+        &[("MOCK_UNAME", std::ffi::OsStr::new("Linux"))],
+    );
+    assert!(!output.status.success());
+    let error = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        error.contains("requires GNU mv with -T -n or gmv, or Darwin renamex_np with Python 3"),
+        "{error}"
+    );
+    assert!(!directory.path().join("dependency").exists());
     assert_no_staging_artifacts(directory.path(), "dependency");
 }
 
@@ -370,6 +498,31 @@ fn install_racing_mv(bin: &Path) {
         real_mv
     );
     write_executable(&bin.join("mv"), &script);
+}
+
+fn install_darwin_publish_tools(bin: &Path) {
+    install_bsd_mv_mocks(bin);
+    write_executable(
+        &bin.join("uname"),
+        "#!/usr/bin/env bash\nprintf '%s\\n' \"${MOCK_UNAME:-Darwin}\"\n",
+    );
+    let real_python = Command::new("which")
+        .arg("python3")
+        .output()
+        .expect("locate python3");
+    assert!(real_python.status.success());
+    let real_python = String::from_utf8(real_python.stdout).unwrap().trim().to_owned();
+    let script = format!(
+        "#!/usr/bin/env bash\nset -euo pipefail\n[[ \"$1\" == -c ]] || exit 90\nsource=$3\ndestination=$4\nexec '{}' -c 'import os, sys\nsrc, dst = sys.argv[1:]\nmode = os.environ.get(\"MOCK_DARWIN_RENAME\")\nif mode == \"race\":\n    os.mkdir(dst)\n    open(os.path.join(dst, \"marker\"), \"w\").write(\"keep me\\n\")\n    raise SystemExit(17)\nif mode == \"error\":\n    raise SystemExit(18)\nos.rename(src, dst)' \"$source\" \"$destination\"\n",
+        real_python
+    );
+    write_executable(&bin.join("mock-python3"), &script);
+}
+
+fn install_bsd_mv_mocks(bin: &Path) {
+    let script = "#!/usr/bin/env bash\nif [[ \"$1\" == --help ]]; then echo 'usage: BSD mv source destination'; exit 1; fi\nexit 90\n";
+    write_executable(&bin.join("mv"), script);
+    write_executable(&bin.join("gmv"), script);
 }
 
 fn write_executable(path: &Path, content: &str) {
