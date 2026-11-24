@@ -26,11 +26,7 @@ fn test_local_path_dependencies_are_pinned_and_strictly_checked() {
 
     let script = helper_script();
     let output = run_helper(&script, &project, &bin, REVISION, &[], &[]);
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
 
     let checkout = directory.path().join("dependency");
     assert_eq!(
@@ -126,10 +122,7 @@ fn test_destination_created_at_publish_time_is_preserved() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("appeared during publication; preserving it")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr).contains("appeared during publication; preserving it"));
 
     let target = directory.path().join("dependency");
     assert_eq!(fs::read_to_string(target.join("marker")).unwrap(), "keep me\n");
@@ -506,10 +499,7 @@ fn install_darwin_publish_tools(bin: &Path) {
         &bin.join("uname"),
         "#!/usr/bin/env bash\nprintf '%s\\n' \"${MOCK_UNAME:-Darwin}\"\n",
     );
-    let real_python = Command::new("which")
-        .arg("python3")
-        .output()
-        .expect("locate python3");
+    let real_python = Command::new("which").arg("python3").output().expect("locate python3");
     assert!(real_python.status.success());
     let real_python = String::from_utf8(real_python.stdout).unwrap().trim().to_owned();
     let script = format!(
