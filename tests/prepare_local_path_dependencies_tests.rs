@@ -146,6 +146,26 @@ fn test_nested_plain_directory_is_not_accepted_as_a_dependency_checkout() {
     write_config(&project, "../parent-repo/dependency", "/mock/dependency.git", REVISION);
     install_mock_git(&bin);
 
+    let parent_head = Command::new("git")
+        .args(["-C", nested.to_str().unwrap(), "rev-parse", "HEAD"])
+        .env("PATH", prepend_path(&bin))
+        .env("MOCK_GIT_HEAD", REVISION)
+        .output()
+        .expect("query mock parent repository HEAD");
+    assert!(parent_head.status.success(), "fixture must expose parent HEAD");
+    assert_eq!(String::from_utf8_lossy(&parent_head.stdout).trim(), REVISION);
+    let parent_root = Command::new("git")
+        .args(["-C", nested.to_str().unwrap(), "rev-parse", "--show-toplevel"])
+        .env("PATH", prepend_path(&bin))
+        .env("MOCK_GIT_HEAD", REVISION)
+        .output()
+        .expect("query mock parent repository root");
+    assert!(parent_root.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&parent_root.stdout).trim(),
+        parent_repo.to_str().unwrap()
+    );
+
     let script = helper_script();
     let prepare = run_helper(&script, &project, &bin, REVISION, &[], &[]);
     assert!(!prepare.status.success());
@@ -316,10 +336,13 @@ if [[ "$1" == -C ]]; then
             if [[ "${2:-}" == --show-toplevel ]]; then
                 cursor=$checkout
                 while [[ "$cursor" != / && ! -e "$cursor/.git" ]]; do cursor=$(dirname "$cursor"); done
+                [[ -e "$cursor/.git" ]] || exit 128
                 printf '%s\n' "$cursor"
                 exit 0
             fi
-            [[ -f "$checkout/fixture.txt" ]] || exit 128
+            cursor=$checkout
+            while [[ "$cursor" != / && ! -e "$cursor/.git" ]]; do cursor=$(dirname "$cursor"); done
+            [[ -e "$cursor/.git" ]] || exit 128
             printf '%s\n' "$MOCK_GIT_HEAD"
             exit 0
             ;;
