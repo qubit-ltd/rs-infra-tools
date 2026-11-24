@@ -154,7 +154,7 @@ mod tests {
     const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
 
     #[test]
-    fn parses_comments_and_valid_entries() {
+    fn test_parses_comments_and_valid_entries() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("tools.lock");
         fs::write(
@@ -167,7 +167,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_names_and_bad_digests() {
+    fn test_rejects_duplicate_names_and_bad_digests() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("tools.lock");
         fs::write(

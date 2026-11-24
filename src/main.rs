@@ -7,70 +7,15 @@
 // =============================================================================
 //! Command-line entry point for `rs-infra-tools`.
 
-use std::path::PathBuf;
-
 use anyhow::Result;
 use clap::Parser;
-use clap::Subcommand;
+use cli::Cli;
+use cli::command::Command;
 use qubit_infra_tools::cache;
 use qubit_infra_tools::ensure;
 use qubit_infra_tools::runtime;
 
-/// Command-line options for `rs-infra-tools`.
-#[derive(Debug, Parser)]
-#[command(name = "rs-infra-tools")]
-struct Cli {
-    /// The lock-file operation to execute.
-    #[command(subcommand)]
-    command: Command,
-}
-
-/// Supported lock-file and execution operations.
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Ensures a locked tool and prints its executable path.
-    Ensure {
-        /// Path to the `tools.lock` file.
-        #[arg(long)]
-        lock: PathBuf,
-        /// Name of the tool to ensure.
-        #[arg(long)]
-        tool: String,
-    },
-    /// Ensures a locked tool and executes it.
-    Exec {
-        /// Path to the `tools.lock` file.
-        #[arg(long)]
-        lock: PathBuf,
-        /// Name of the tool to execute.
-        #[arg(long)]
-        tool: String,
-        /// Arguments passed to the executable.
-        #[arg(last = true)]
-        args: Vec<String>,
-    },
-    /// Runs the current main revision of an infrastructure tool.
-    Latest {
-        /// Project root passed to the tool.
-        #[arg(long, default_value = ".")]
-        project: PathBuf,
-        /// Infrastructure executable name, for example `rs-infra-style`.
-        #[arg(long)]
-        tool: String,
-        /// Arguments passed to the executable unchanged.
-        #[arg(last = true)]
-        args: Vec<String>,
-    },
-    /// Resolves and caches every supported infrastructure tool.
-    Prewarm {
-        /// Project root whose configuration will be used later.
-        #[arg(long, default_value = ".")]
-        project: PathBuf,
-        /// Install the resolved analyzer and its identity into the project.
-        #[arg(long)]
-        install_style_analyzer: bool,
-    },
-}
+mod cli;
 
 /// Parses options, executes the selected operation, and always reports its
 /// final status before exiting.
@@ -91,6 +36,10 @@ fn main() {
 ///
 /// Errors from tool resolution or execution are returned to `main` for
 /// consistent reporting on stderr.
+///
+/// # Parameters
+///
+/// - `command`: parsed operation to execute.
 fn execute(command: Command) -> Result<i32> {
     match command {
         Command::Ensure { lock, tool } => {
