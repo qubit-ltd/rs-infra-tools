@@ -78,11 +78,7 @@ while IFS=$'\t' read -r relative_path repository_url revision; do
         fi
         continue
     fi
-    if is_checkout_root "$target" && actual_revision=$(git -C "$target" rev-parse HEAD 2>&1); then
-        if [[ "$revision" =~ ^[[:xdigit:]]{40}$ && "$actual_revision" != "$revision" ]]; then
-            echo "error: existing dependency '$relative_path' HEAD mismatch: actual $actual_revision; expected $revision" >&2
-            exit 1
-        fi
+    if is_checkout_root "$target"; then
         continue
     elif [[ -e "$target" || -L "$target" ]]; then
         echo "error: refusing to replace existing dependency path '$relative_path'" >&2

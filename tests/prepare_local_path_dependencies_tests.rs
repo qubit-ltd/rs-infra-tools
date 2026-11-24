@@ -45,13 +45,15 @@ fn test_local_path_dependencies_are_pinned_and_strictly_checked() {
 
     let mismatched_revision = "0".repeat(40);
     write_config(&project, "../dependency", "/mock/dependency.git", &mismatched_revision);
-    let mismatch = run_helper(&script, &project, &bin, REVISION, &[], &[]);
-    assert!(!mismatch.status.success());
-    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("existing dependency '../dependency' HEAD mismatch"));
+    let reuse = run_helper(&script, &project, &bin, REVISION, &[], &[]);
+    assert!(reuse.status.success(), "{}", String::from_utf8_lossy(&reuse.stderr));
     assert_eq!(
         fs::read_to_string(checkout.join("fixture.txt")).unwrap(),
         "mock source\n"
     );
+    let mismatch = run_helper(&script, &project, &bin, REVISION, &["--check-locked"], &[]);
+    assert!(!mismatch.status.success());
+    assert!(String::from_utf8_lossy(&mismatch.stderr).contains("locked dependency '../dependency' HEAD mismatch"));
 }
 
 #[test]
