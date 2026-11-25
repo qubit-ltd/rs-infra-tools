@@ -349,33 +349,27 @@ fn prewarm_retries_transient_revision_lookup_in_an_isolated_process() {
 #[test]
 fn prewarm_reports_checkout_and_build_failures_without_network_access() {
     let cases = [
-        ("FIXTURE_FAIL_LS_REMOTE", "lookup-failed"),
-        ("FIXTURE_EMPTY_REVISION", "main branch returned no revision"),
-        ("FIXTURE_NON_UTF8_REVISION", "git ls-remote returned non-UTF-8 output"),
-        ("FIXTURE_FAIL_INIT", "failed to initialize source cache"),
-        ("FIXTURE_FAIL_REMOTE", "failed to configure source cache"),
-        ("FIXTURE_FAIL_GIT_FETCH", "fetch tool source failed"),
-        ("FIXTURE_FAIL_CHECKOUT", "failed to check out"),
-        ("FIXTURE_FAIL_HEAD", "resolved to , expected"),
-        ("FIXTURE_BAD_HEAD", "resolved to ffffffffff"),
-        ("FIXTURE_NO_MANIFEST", "has no Cargo.toml"),
-        ("FIXTURE_CARGO_FAIL_FETCH", "fetch Cargo dependencies failed"),
-        ("FIXTURE_CARGO_FAIL_BUILD", "failed to build"),
-        ("FIXTURE_CARGO_NO_BINARY", "cargo build succeeded but"),
-        ("FIXTURE_PUBLISH_FAILURE", "failed to publish rs-infra-ci"),
-        ("FIXTURE_PUBLISH_FAILURE", "failed to install rs-infra-ci"),
+        ("FIXTURE_FAIL_LS_REMOTE", "yes", "lookup-failed"),
+        ("FIXTURE_EMPTY_REVISION", "yes", "main branch returned no revision"),
+        ("FIXTURE_NON_UTF8_REVISION", "yes", "git ls-remote returned non-UTF-8 output"),
+        ("FIXTURE_FAIL_INIT", "yes", "failed to initialize source cache"),
+        ("FIXTURE_FAIL_REMOTE", "yes", "failed to configure source cache"),
+        ("FIXTURE_FAIL_GIT_FETCH", "yes", "fetch tool source failed"),
+        ("FIXTURE_FAIL_CHECKOUT", "yes", "failed to check out"),
+        ("FIXTURE_FAIL_HEAD", "yes", "resolved to , expected"),
+        ("FIXTURE_BAD_HEAD", "yes", "resolved to ffffffffff"),
+        ("FIXTURE_NO_MANIFEST", "yes", "has no Cargo.toml"),
+        ("FIXTURE_CARGO_FAIL_FETCH", "yes", "fetch Cargo dependencies failed"),
+        ("FIXTURE_CARGO_FAIL_BUILD", "yes", "failed to build"),
+        ("FIXTURE_CARGO_NO_BINARY", "yes", "cargo build succeeded but"),
+        ("FIXTURE_PUBLISH_FAILURE", "copy", "failed to publish rs-infra-ci"),
+        ("FIXTURE_PUBLISH_FAILURE", "rename", "failed to install rs-infra-ci"),
     ];
-    for (index, (variable, expected)) in cases.into_iter().enumerate() {
+    for (variable, value, expected) in cases {
         let fixture = Fixture::new();
-        let publish_mode = match index {
-            13 => "copy",
-            14 => "rename",
-            _ => "",
-        };
         let output = fixture.command(&["prewarm"])
             .env("RS_INFRA_SHARED_ROOT", fixture.manager())
-            .env(variable, "yes")
-            .env("FIXTURE_PUBLISH_FAILURE", publish_mode)
+            .env(variable, value)
             .env("RS_INFRA_NETWORK_MAX_ATTEMPTS", "1")
             .env("RS_INFRA_NETWORK_RETRY_DELAY_SECONDS", "0")
             .output().unwrap();
