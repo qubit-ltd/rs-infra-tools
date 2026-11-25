@@ -79,10 +79,47 @@ fn execute(command: Command) -> Result<i32> {
 
 #[cfg(test)]
 mod tests {
-    use clap::Parser;
+    use std::env;
+    use std::ffi::OsString;
+    use std::fs;
+    use std::sync::Mutex;
 
+    use clap::Parser;
+    use sha2::Digest;
+    use sha2::Sha256;
+
+    use super::execute;
     use super::Cli;
     use super::Command;
+
+    static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        name: &'static str,
+        original: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(name: &'static str, value: &std::ffi::OsStr) -> Self {
+            let original = env::var_os(name);
+            // SAFETY: Tests that mutate process environment hold ENVIRONMENT_LOCK;
+            // the other test in this module only parses arguments and reads no environment.
+            unsafe { env::set_var(name, value) };
+            Self { name, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.original {
+                // SAFETY: See the synchronization guarantee in `EnvVarGuard::set`.
+                unsafe { env::set_var(self.name, value) };
+            } else {
+                // SAFETY: See the synchronization guarantee in `EnvVarGuard::set`.
+                unsafe { env::remove_var(self.name) };
+            }
+        }
+    }
 
     #[test]
     fn test_prewarm_requires_explicit_project_install_flag() {
@@ -109,5 +146,76 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_execute_reports_successful_child() {
+        let _environment_lock = ENVIRONMENT_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let _cache_dir = EnvVarGuard::set("RS_INFRA_CACHE_DIR", directory.path().as_os_str());
+        let source = directory.path().join("tool");
+        let bytes = b"#!/bin/sh\nexit 0\n";
+        fs::write(&source, bytes).unwrap();
+        let target = match (env::consts::ARCH, env::consts::OS) {
+            ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+            ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+            ("x86_64", "macos") => "x86_64-apple-darwin",
+            ("aarch64", "macos") => "aarch64-apple-darwin",
+            _ => panic!("unsupported test target"),
+        };
+        let digest = Sha256::digest(bytes)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let lock = directory.path().join("tools.lock");
+        fs::write(
+            &lock,
+            format!(
+                "test-success-tool file://{} 0123456789abcdef0123456789abcdef01234567 {target} {digest}\n",
+                source.display()
+            ),
+        )
+        .unwrap();
+
+        let code = execute(Command::Exec {
+            lock,
+            tool: "test-success-tool".to_owned(),
+            args: Vec::new(),
+        })
+        .unwrap();
+
+        assert_eq!(code, 0);
+    }
+
+    #[test]
+    fn test_execute_reports_unknown_latest_tool_and_failed_prewarm_modes() {
+        let _environment_lock = ENVIRONMENT_LOCK.lock().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let _cache_dir = EnvVarGuard::set("RS_INFRA_CACHE_DIR", directory.path().as_os_str());
+        let _shared_root = EnvVarGuard::set(
+            "RS_INFRA_SHARED_ROOT",
+            directory.path().join("not-a-checkout").as_os_str(),
+        );
+
+        let latest_error = execute(Command::Latest {
+            project: directory.path().to_owned(),
+            tool: "unknown-tool".to_owned(),
+            args: Vec::new(),
+        })
+        .unwrap_err();
+        assert!(latest_error.to_string().contains("unknown infrastructure tool"));
+
+        for install_style_analyzer in [false, true] {
+            let prewarm_error = execute(Command::Prewarm {
+                project: directory.path().to_owned(),
+                install_style_analyzer,
+            })
+            .unwrap_err();
+            assert!(
+                prewarm_error.to_string().contains("RS_INFRA_SHARED_ROOT"),
+                "unexpected prewarm error: {prewarm_error:#}"
+            );
+        }
     }
 }

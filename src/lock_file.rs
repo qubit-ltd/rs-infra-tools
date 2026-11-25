@@ -148,7 +148,9 @@ fn validate_entry(entry: &LockEntry) -> Result<()> {
 mod tests {
     use std::fs;
 
+    use super::super::LockEntry;
     use super::LockFile;
+    use super::validate_entry;
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
     const REVISION: &str = "0123456789abcdef0123456789abcdef01234567";
@@ -172,9 +174,51 @@ mod tests {
         let path = directory.path().join("tools.lock");
         fs::write(
             &path,
-            "a file:///a 0000000000000000000000000000000000000000 x bad\na file:///b 0000000000000000000000000000000000000000 x 0000000000000000000000000000000000000000000000000000000000000000",
+            format!(
+                "a file:///a {REVISION} x {SHA}\na file:///b {REVISION} x {SHA}"
+            ),
         )
         .unwrap();
-        assert!(LockFile::read(&path).is_err());
+        let duplicate_error = LockFile::read(&path).unwrap_err();
+        assert!(duplicate_error.to_string().contains("duplicate tool on line 2"));
+
+        fs::write(&path, format!("a file:///a {REVISION} x bad")).unwrap();
+        let digest_error = LockFile::read(&path).unwrap_err();
+        assert!(format!("{digest_error:#}").contains("sha256"));
+    }
+
+    #[test]
+    fn test_rejects_invalid_entry_fields() {
+        let valid_entry = LockEntry {
+            name: "rs-infra-style".to_owned(),
+            source: "file:///style".to_owned(),
+            revision: REVISION.to_owned(),
+            target: "x86_64-unknown-linux-gnu".to_owned(),
+            sha256: SHA.to_owned(),
+        };
+
+        let mut invalid = valid_entry.clone();
+        invalid.name.clear();
+        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("tool name"));
+
+        invalid = valid_entry.clone();
+        invalid.name = "tools/style".to_owned();
+        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("tool name"));
+
+        invalid = valid_entry.clone();
+        invalid.revision = "short".to_owned();
+        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("revision"));
+
+        invalid = valid_entry.clone();
+        invalid.revision = "g".repeat(40);
+        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("revision"));
+
+        invalid = valid_entry.clone();
+        invalid.source.clear();
+        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("source and target"));
+
+        invalid = valid_entry;
+        invalid.target.clear();
+        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("source and target"));
     }
 }

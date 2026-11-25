@@ -49,3 +49,45 @@ impl Drop for CacheLock {
         let _ = self.file.unlock();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    use super::CacheLock;
+
+    #[test]
+    fn test_acquire_creates_parent_and_lock_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested/cache.lock");
+
+        let lock = CacheLock::acquire(&path).unwrap();
+        assert!(path.is_file());
+        drop(lock);
+
+        assert!(CacheLock::acquire(&path).is_ok());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_acquire_rejects_a_path_without_a_parent() {
+        let error = CacheLock::acquire(Path::new("/")).err().unwrap();
+
+        assert!(error.to_string().contains("lock path has no parent"));
+    }
+
+    #[test]
+    fn test_acquire_reports_lock_open_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("lock-is-a-directory");
+        fs::create_dir(&path).unwrap();
+
+        let error = CacheLock::acquire(&path).err().unwrap();
+
+        assert!(
+            format!("{error:#}").contains("failed to open cache lock"),
+            "unexpected cache lock error: {error:#}"
+        );
+    }
+}
