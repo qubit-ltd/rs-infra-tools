@@ -166,6 +166,9 @@ mod tests {
         .unwrap();
         let lock = LockFile::read(&path).unwrap();
         assert_eq!(lock.entry("rs-infra-style").unwrap().revision, REVISION);
+
+        let missing_entry = lock.entry("missing").unwrap_err();
+        assert!(missing_entry.to_string().contains("tool 'missing' is not present"));
     }
 
     #[test]
