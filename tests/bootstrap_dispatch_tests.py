@@ -885,13 +885,17 @@ class BootstrapDispatchTests(unittest.TestCase):
 
                 try:
                     deadline = time.monotonic() + 3
-                    while not signal.exists() and time.monotonic() < deadline:
+                    while time.monotonic() < deadline:
                         if child.poll() is not None:
                             child.wait(timeout=2)
                             self.fail(f"bootstrap exited before observing held lock: {child_output()}")
+                        if attempts.exists() and len(attempts.read_text().splitlines()) >= 2:
+                            break
                         time.sleep(0.01)
-                    self.assertTrue(signal.exists(), "bootstrap did not observe mkdir failure while the test held the lock")
-                    self.assertEqual(attempts.read_text().splitlines(), ["failed"])
+                    self.assertTrue(signal.exists(), "bootstrap did not observe mkdir failure while the test held lock")
+                    failed_before_release = attempts.read_text().splitlines()
+                    self.assertGreaterEqual(len(failed_before_release), 2)
+                    self.assertTrue(all(attempt == "failed" for attempt in failed_before_release))
                     self.assertTrue(lock.exists(), "test lock must remain held until the failure observation")
                     shutil.rmtree(lock)
                     try:
@@ -908,7 +912,10 @@ class BootstrapDispatchTests(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, result.stdout)
                     self.assertNotIn("timed out", result.stdout)
                     self.assertFalse(lock.exists(), "the acquired lock should be cleaned on normal exit")
-                    self.assertEqual(attempts.read_text().splitlines(), ["failed", "success"])
+                    recorded_attempts = attempts.read_text().splitlines()
+                    self.assertGreaterEqual(len(recorded_attempts), 3)
+                    self.assertTrue(all(attempt == "failed" for attempt in recorded_attempts[:-1]))
+                    self.assertEqual(recorded_attempts[-1], "success")
                     self.assertEqual(len((root / "cache" / "cargo.log").read_text().splitlines()), 2)
                 finally:
                     kill_child_group()
@@ -918,6 +925,130 @@ class BootstrapDispatchTests(unittest.TestCase):
                         kill_child_group()
                         try:
                             child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    output_file.close()
+
+    def test_bootstrap_term_keeps_lock_until_cache_writer_exits(self) -> None:
+        bootstraps = (
+            REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh",
+            REPO / ".infra/bootstrap.sh",
+            REPO / "assets/bootstrap.sh",
+        )
+        for bootstrap in bootstraps:
+            with self.subTest(bootstrap=bootstrap), tempfile.TemporaryDirectory(prefix="bootstrap-term-lock-") as temp:
+                root = Path(temp)
+                env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                env["RS_INFRA_BOOTSTRAP_LOCK_TIMEOUT_SECONDS"] = "1"
+                gate = root / "release-cache-writer"
+                started = root / "cache-writer-started"
+                signal_sent = root / "term-signal-sent"
+                child_finished = root / "cache-writer-finished"
+                attempts = root / "mkdir-attempts"
+                cargo_log = root / "cargo-invocations"
+                env.update({
+                    "CACHE_WRITER_GATE": str(gate),
+                    "CACHE_WRITER_STARTED": str(started),
+                    "TERM_SIGNAL_SENT": str(signal_sent),
+                    "CACHE_WRITER_FINISHED": str(child_finished),
+                    "LOCK_ATTEMPTS": str(attempts),
+                    "CARGO_INVOCATIONS": str(cargo_log),
+                    "TEST_LOCK": str(lock),
+                })
+                fake_bin = root / "signal-bin"
+                fake_bin.mkdir()
+                real_mkdir = shutil.which("mkdir")
+                self.assertIsNotNone(real_mkdir)
+                (fake_bin / "mkdir").write_text(
+                    "#!/usr/bin/env bash\n"
+                    'if [[ "${1:-}" == "$TEST_LOCK" ]]; then\n'
+                    f'  if "{real_mkdir}" "$@"; then printf "success\\n" >> "$LOCK_ATTEMPTS"; exit 0; '
+                    'else status=$?; printf "failed\\n" >> "$LOCK_ATTEMPTS"; exit "$status"; fi\n'
+                    "fi\n"
+                    f'exec "{real_mkdir}" "$@"\n'
+                )
+                (fake_bin / "mkdir").chmod(0o755)
+                cargo = Path(env["PATH"].split(":", 1)[0]) / "cargo"
+                cargo.write_text(
+                    "#!/usr/bin/env bash\n"
+                    'printf "%s\\n" "$*" >> "$CARGO_INVOCATIONS"\n'
+                    'case " $* " in\n'
+                    '  *" build "*)\n'
+                    '    touch "$CACHE_WRITER_STARTED"\n'
+                    '    kill -TERM "$(cat "$TEST_LOCK/pid")"\n'
+                    '    touch "$TERM_SIGNAL_SENT"\n'
+                    '    while [[ ! -e "$CACHE_WRITER_GATE" ]]; do sleep 0.02; done\n'
+                    '    touch "$CACHE_WRITER_FINISHED"\n'
+                    '    mkdir -p "$CARGO_TARGET_DIR/release"\n'
+                    '    cp "$MANAGER_STUB" "$CARGO_TARGET_DIR/release/rs-infra-tools"\n'
+                    '    ;;\n'
+                    'esac\n'
+                )
+                cargo.chmod(0o755)
+                env["PATH"] = f"{fake_bin}:{env['PATH']}"
+                output_path = root / "bootstrap-output.log"
+                output_file = output_path.open("w", encoding="utf-8")
+                parent = subprocess.Popen(
+                    ["bash", str(bootstrap), ".infra/bin/infra-tool.sh"],
+                    env=env,
+                    stdout=output_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+
+                def kill_parent_group() -> None:
+                    try:
+                        os.killpg(parent.pid, signal_module.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+                def parent_output() -> str:
+                    output_file.flush()
+                    return output_path.read_text(encoding="utf-8")
+
+                try:
+                    deadline = time.monotonic() + 4
+                    while not signal_sent.exists() and time.monotonic() < deadline:
+                        if parent.poll() is not None:
+                            self.fail(f"bootstrap exited before cache writer started: {parent_output()}")
+                        time.sleep(0.01)
+                    self.assertTrue(started.exists(), "fake cargo did not begin its build")
+                    self.assertTrue(signal_sent.exists(), "fake cargo did not send TERM to its bootstrap parent")
+                    self.assertIsNone(parent.poll(), "Bash must wait for its signaled cache writer")
+                    self.assertTrue(lock.is_dir(), "the parent lock must remain while its child is gated")
+                    self.assertEqual((lock / "pid").read_text().strip(), str(parent.pid))
+
+                    competitor = self.run_bootstrap(bootstrap, env)
+                    self.assertNotEqual(competitor.returncode, 0, competitor.stdout + competitor.stderr)
+                    self.assertIn("timed out waiting for bootstrap lock", competitor.stderr)
+                    self.assertTrue(lock.is_dir(), "a competing bootstrap must not remove the parent's lock")
+                    cargo_calls = cargo_log.read_text().splitlines()
+                    self.assertEqual(len(cargo_calls), 2)
+                    self.assertTrue(cargo_calls[0].startswith("fetch "))
+                    self.assertTrue(cargo_calls[1].startswith("build "))
+
+                    gate.touch()
+                    try:
+                        parent.wait(timeout=4)
+                    except subprocess.TimeoutExpired:
+                        self.fail(f"bootstrap did not exit after cache writer completed: {parent_output()}")
+                    self.assertTrue(child_finished.exists(), "the cache writer must finish before Bash exits")
+                    self.assertEqual(parent.returncode, 143, parent_output())
+                    self.assertIn("received TERM", parent_output())
+                    self.assertIn(str(lock), parent_output())
+                    self.assertIn("cache-writing child processes have stopped", parent_output())
+                    self.assertTrue(lock.is_dir(), "TERM must preserve the acquired lock")
+                    self.assertEqual(attempts.read_text().splitlines()[0], "success")
+                    self.assertTrue(all(value == "failed" for value in attempts.read_text().splitlines()[1:]))
+                finally:
+                    gate.touch(exist_ok=True)
+                    kill_parent_group()
+                    try:
+                        parent.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        kill_parent_group()
+                        try:
+                            parent.wait(timeout=2)
                         except subprocess.TimeoutExpired:
                             pass
                     output_file.close()
