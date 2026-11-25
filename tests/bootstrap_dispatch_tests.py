@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -665,15 +666,18 @@ class BootstrapDispatchTests(unittest.TestCase):
             "PATH": f"{bin_dir}:{os.environ['PATH']}",
             "HOME": str(root),
             "XDG_CACHE_HOME": str(root / "cache-home"),
+            "RS_INFRA_CACHE_DIR": str(root / "cache"),
             "RS_INFRA_PROJECT_ROOT": str(project),
             "RS_INFRA_NETWORK_MAX_ATTEMPTS": "1",
             "RS_INFRA_BOOTSTRAP_LOCK_TIMEOUT_SECONDS": "1",
             "FAKE_REVISION": revision,
-            "CARGO_LOG": str(root / "cargo.log"),
-            "DOWNSTREAM_ENV_LOG": str(root / "downstream-env.log"),
+            "CARGO_LOG": str(root / "cache" / "cargo.log"),
+            "DOWNSTREAM_ENV_LOG": str(root / "cache" / "downstream-env.log"),
             "MANAGER_STUB": str(manager_stub),
         }
-        cache_root = Path(env["XDG_CACHE_HOME"]) / "qubit/rs-infra"
+        for name in ("RS_INFRA_SHARED_ROOT", "RS_INFRA_TOOLS_BIN", "RS_INFRA_BIN_DIR"):
+            env.pop(name, None)
+        cache_root = Path(env["RS_INFRA_CACHE_DIR"]) / "rs-infra"
         lock = cache_root / f"locks/manager-{revision}.lock"
         return env, revision, lock
 
@@ -698,17 +702,47 @@ class BootstrapDispatchTests(unittest.TestCase):
                         env["CARGO_TARGET_DIR"] = original_target
                     first = self.run_bootstrap(bootstrap, env)
                     self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-                    cargo_lines = (root / "cargo.log").read_text().splitlines()
+                    cargo_lines = (root / "cache" / "cargo.log").read_text().splitlines()
                     self.assertEqual(len(cargo_lines), 2)
-                    manager_target = f"{root}/cache-home/qubit/rs-infra/build/manager/{revision}/x86_64-unknown-linux-gnu/rustc_1.94.0_(fake)"
+                    manager_target = f"{root}/cache/rs-infra/build/manager/{revision}/x86_64-unknown-linux-gnu/rustc_1.94.0_(fake)"
                     self.assertTrue(cargo_lines[-1].startswith("build "))
                     self.assertEqual(cargo_lines[-1].split("|", 1)[1].split("|", 1)[0], manager_target)
                     expected = "<unset>" if original_target is None else original_target
-                    self.assertEqual((root / "downstream-env.log").read_text().splitlines(), [expected])
+                    self.assertEqual((root / "cache" / "downstream-env.log").read_text().splitlines(), [expected])
                     second = self.run_bootstrap(bootstrap, env)
                     self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
-                    self.assertEqual(len((root / "cargo.log").read_text().splitlines()), 2)
-                    self.assertEqual((root / "downstream-env.log").read_text().splitlines(), [expected, expected])
+                    self.assertEqual(len((root / "cache" / "cargo.log").read_text().splitlines()), 2)
+                    self.assertEqual((root / "cache" / "downstream-env.log").read_text().splitlines(), [expected, expected])
+
+    def test_bootstrap_fixture_ignores_outer_cache_and_shared_manager(self) -> None:
+        for bootstrap in (REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh", REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh"):
+            with self.subTest(bootstrap=bootstrap), tempfile.TemporaryDirectory(prefix="bootstrap-isolation-") as temp:
+                root = Path(temp)
+                outer_cache = root / "outer-cache"
+                outer_cache.mkdir()
+                sentinel = root / "bypass-manager"
+                sentinel.write_text("#!/usr/bin/env bash\nprintf 'bypassed\\n' >> \"$BYPASS_LOG\"\n")
+                sentinel.chmod(0o755)
+                outer_env = {
+                    "XDG_CACHE_HOME": str(outer_cache),
+                    "RS_INFRA_CACHE_DIR": str(outer_cache),
+                    "RS_INFRA_SHARED_ROOT": str(root / "outer-shared"),
+                    "RS_INFRA_TOOLS_BIN": str(sentinel),
+                    "RS_INFRA_BIN_DIR": str(root / "outer-bin"),
+                }
+                with patch.dict(os.environ, outer_env):
+                    env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                self.assertTrue(all(name not in env for name in ("RS_INFRA_SHARED_ROOT", "RS_INFRA_TOOLS_BIN", "RS_INFRA_BIN_DIR")))
+                self.assertEqual(env["RS_INFRA_CACHE_DIR"], str(root / "cache"))
+                env["BYPASS_LOG"] = str(root / "bypass.log")
+                result = self.run_bootstrap(bootstrap, env)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse((root / "bypass.log").exists())
+                self.assertEqual(list(outer_cache.iterdir()), [])
+                cargo_lines = (root / "cache" / "cargo.log").read_text().splitlines()
+                self.assertEqual(len(cargo_lines), 2)
+                self.assertTrue(cargo_lines[-1].startswith("build "))
+                self.assertFalse(lock.exists())
 
     def test_bootstrap_lock_timeout_requires_a_bounded_decimal_value(self) -> None:
         for bootstrap in (REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh", REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh"):
@@ -809,29 +843,62 @@ class BootstrapDispatchTests(unittest.TestCase):
                 root = Path(temp)
                 env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
                 env["RS_INFRA_BOOTSTRAP_LOCK_TIMEOUT_SECONDS"] = "5"
+                signal = root / "first-mkdir-failed"
+                attempts = root / "mkdir-attempts"
+                fake_bin = root / "fake-bin"
+                fake_bin.mkdir()
+                real_mkdir = shutil.which("mkdir")
+                self.assertIsNotNone(real_mkdir)
+                (fake_bin / "mkdir").write_text(
+                    "#!/usr/bin/env bash\n"
+                    f'if [[ "${{1:-}}" == "{lock}" ]]; then\n'
+                    f'  if "{real_mkdir}" "$@"; then printf "success\\n" >> "{attempts}"; exit 0; '
+                    f'else status=$?; printf "failed\\n" >> "{attempts}"; touch "{signal}"; exit "$status"; fi\n'
+                    "fi\n"
+                    f'exec "{real_mkdir}" "$@"\n'
+                )
+                (fake_bin / "mkdir").chmod(0o755)
+                env["PATH"] = f"{fake_bin}:{env['PATH']}"
                 lock.parent.mkdir(parents=True, exist_ok=True)
-                holder = subprocess.Popen(
-                    ["bash", "-c", 'mkdir "$1"; printf "%s\\n" "$$" > "$1/pid"; sleep 2; rm -rf -- "$1"', "holder", str(lock)],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                lock.mkdir()
+                (lock / "pid").write_text(f"{os.getpid()}\n")
+                child = subprocess.Popen(
+                    ["bash", str(bootstrap), ".infra/bin/infra-tool.sh"],
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                     text=True,
                 )
                 try:
-                    for _ in range(100):
-                        if (lock / "pid").exists():
-                            break
-                        if holder.poll() is not None:
-                            self.fail("lock holder exited before publishing its pid")
+                    deadline = time.monotonic() + 3
+                    while not signal.exists() and time.monotonic() < deadline:
+                        if child.poll() is not None:
+                            stdout, stderr = child.communicate()
+                            self.fail(f"bootstrap exited before observing held lock: {stdout}{stderr}")
                         time.sleep(0.01)
-                    result = self.run_bootstrap(bootstrap, env)
+                    self.assertTrue(signal.exists(), "bootstrap did not observe mkdir failure while the test held the lock")
+                    self.assertEqual(attempts.read_text().splitlines(), ["failed"])
+                    self.assertTrue(lock.exists(), "test lock must remain held until the failure observation")
+                    shutil.rmtree(lock)
+                    try:
+                        stdout, stderr = child.communicate(timeout=6)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                        stdout, stderr = child.communicate(timeout=2)
+                        self.fail(f"bootstrap did not finish after lock release: {stdout}{stderr}")
+                    result = subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertNotIn("timed out", result.stderr)
                     self.assertFalse(lock.exists(), "the acquired lock should be cleaned on normal exit")
-                    self.assertEqual(len((root / "cargo.log").read_text().splitlines()), 2)
+                    self.assertEqual(attempts.read_text().splitlines(), ["failed", "success"])
+                    self.assertEqual(len((root / "cache" / "cargo.log").read_text().splitlines()), 2)
                 finally:
-                    if holder.poll() is None:
-                        holder.terminate()
-                    holder.wait(timeout=3)
+                    if child.poll() is None:
+                        child.kill()
+                    try:
+                        child.communicate(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
 
 
 if __name__ == "__main__":
