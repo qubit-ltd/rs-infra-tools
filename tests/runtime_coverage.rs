@@ -94,6 +94,11 @@ printf '%s\n' "$PATH" > "$FIXTURE_TOOL_PATH"
 exit "${FIXTURE_TOOL_EXIT:-0}"
 TOOL
 chmod +x "$target_dir/release/$binary"
+bin_dir=$(dirname "$target_dir")/bin
+case "${FIXTURE_PUBLISH_FAILURE:-}" in
+  copy) mkdir -p "$bin_dir/.$binary.tmp-$PPID" ;;
+  rename) mkdir -p "$bin_dir/$binary" ;;
+esac
 "###);
         Self { root, revision }
     }
@@ -180,6 +185,60 @@ fn latest_forwards_arguments_path_and_child_exit_status() {
 }
 
 #[test]
+fn latest_ci_uses_a_snapshot_with_every_supported_tool() {
+    let fixture = Fixture::new();
+    fixture.prewarm();
+    let project = fixture.root.path().join("project");
+    let output = fixture.command(&[
+        "latest", "--project", project.to_str().unwrap(), "--tool", "rs-infra-ci", "--", "ci-arg",
+    ])
+        .env("RS_INFRA_SHARED_ROOT", fixture.manager())
+        .output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    assert_eq!(fs::read_to_string(fixture.root.path().join("tool.log")).unwrap().trim(), "ci-arg");
+    let tool_path = fs::read_to_string(fixture.root.path().join("tool-path.log")).unwrap();
+    let bin_dir = std::env::split_paths(std::ffi::OsStr::new(tool_path.trim()))
+        .next().expect("PATH must start with the invocation bin directory");
+    for tool in TOOLS {
+        assert!(bin_dir.join(tool).is_file(), "missing {tool} in {}", bin_dir.display());
+    }
+}
+
+#[test]
+fn latest_reports_context_when_a_cached_tool_cannot_be_started() {
+    let fixture = Fixture::new();
+    fixture.prewarm();
+    let executable = fixture.root.path().join("cache/rs-infra/tools/rs-infra-platform")
+        .join(&fixture.revision).join(host_target()).join(rustc_release()).join("bin/rs-infra-platform");
+    let mut permissions = fs::metadata(&executable).unwrap().permissions();
+    permissions.set_mode(0o644);
+    fs::set_permissions(&executable, permissions).unwrap();
+    let project = fixture.root.path().join("project");
+    let output = fixture.command(&["latest", "--project", project.to_str().unwrap(), "--tool", "rs-infra-platform"])
+        .env("RS_INFRA_SHARED_ROOT", fixture.manager()).output().unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("failed to start rs-infra-platform"));
+}
+
+#[test]
+fn latest_falls_back_to_existing_path_when_cache_path_cannot_be_joined() {
+    let fixture = Fixture::new();
+    let cache = fixture.root.path().join("cache:with-colon");
+    let project = fixture.root.path().join("project");
+    let prewarm = fixture.command(&["prewarm", "--project"]).arg(&project)
+        .env("RS_INFRA_CACHE_DIR", &cache)
+        .env("RS_INFRA_SHARED_ROOT", fixture.manager()).output().unwrap();
+    assert!(prewarm.status.success(), "{}", String::from_utf8_lossy(&prewarm.stderr));
+    let output = fixture.command(&["latest", "--project", project.to_str().unwrap(), "--tool", "rs-infra-platform"])
+        .env("RS_INFRA_CACHE_DIR", &cache)
+        .env("RS_INFRA_SHARED_ROOT", fixture.manager()).output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let tool_path = fs::read_to_string(fixture.root.path().join("tool-path.log")).unwrap();
+    assert!(tool_path.starts_with(fixture.root.path().join("fake-bin").to_str().unwrap()));
+    assert!(!tool_path.starts_with(cache.to_str().unwrap()));
+}
+
+#[test]
 fn latest_rejects_unknown_tools_before_cache_or_git_work() {
     let fixture = Fixture::new();
     let output = fixture.command(&["latest", "--tool", "not-a-tool"]).output().unwrap();
@@ -213,6 +272,26 @@ fn latest_reports_missing_cache_configuration_and_rejects_non_checkout_manager_r
     let output = fixture.command(&["prewarm"]).env("RS_INFRA_SHARED_ROOT", no_entrypoints).output().unwrap();
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("RS_INFRA_SHARED_ROOT does not contain"));
+}
+
+#[test]
+fn prewarm_uses_xdg_and_home_cache_fallbacks() {
+    for (environment, expected) in [
+        ("xdg", "xdg-cache/qubit"),
+        ("home", "home-cache/.cache/qubit"),
+    ] {
+        let fixture = Fixture::new();
+        let mut command = fixture.command(&["prewarm"]);
+        command.env("RS_INFRA_SHARED_ROOT", fixture.manager()).env_remove("RS_INFRA_CACHE_DIR");
+        if environment == "xdg" {
+            command.env("XDG_CACHE_HOME", fixture.root.path().join("xdg-cache"));
+        } else {
+            command.env_remove("XDG_CACHE_HOME").env("HOME", fixture.root.path().join("home-cache"));
+        }
+        let output = command.output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(fixture.root.path().join(expected).join("rs-infra/invocations").is_dir());
+    }
 }
 
 #[test]
@@ -270,25 +349,27 @@ fn prewarm_retries_transient_revision_lookup_in_an_isolated_process() {
 #[test]
 fn prewarm_reports_checkout_and_build_failures_without_network_access() {
     let cases = [
-        ("FIXTURE_FAIL_LS_REMOTE", "lookup-failed"),
-        ("FIXTURE_EMPTY_REVISION", "main branch returned no revision"),
-        ("FIXTURE_NON_UTF8_REVISION", "git ls-remote returned non-UTF-8 output"),
-        ("FIXTURE_FAIL_INIT", "failed to initialize source cache"),
-        ("FIXTURE_FAIL_REMOTE", "failed to configure source cache"),
-        ("FIXTURE_FAIL_GIT_FETCH", "fetch tool source failed"),
-        ("FIXTURE_FAIL_CHECKOUT", "failed to check out"),
-        ("FIXTURE_FAIL_HEAD", "resolved to , expected"),
-        ("FIXTURE_BAD_HEAD", "resolved to ffffffffff"),
-        ("FIXTURE_NO_MANIFEST", "has no Cargo.toml"),
-        ("FIXTURE_CARGO_FAIL_FETCH", "fetch Cargo dependencies failed"),
-        ("FIXTURE_CARGO_FAIL_BUILD", "failed to build"),
-        ("FIXTURE_CARGO_NO_BINARY", "cargo build succeeded but"),
+        ("FIXTURE_FAIL_LS_REMOTE", "yes", "lookup-failed"),
+        ("FIXTURE_EMPTY_REVISION", "yes", "main branch returned no revision"),
+        ("FIXTURE_NON_UTF8_REVISION", "yes", "git ls-remote returned non-UTF-8 output"),
+        ("FIXTURE_FAIL_INIT", "yes", "failed to initialize source cache"),
+        ("FIXTURE_FAIL_REMOTE", "yes", "failed to configure source cache"),
+        ("FIXTURE_FAIL_GIT_FETCH", "yes", "fetch tool source failed"),
+        ("FIXTURE_FAIL_CHECKOUT", "yes", "failed to check out"),
+        ("FIXTURE_FAIL_HEAD", "yes", "resolved to , expected"),
+        ("FIXTURE_BAD_HEAD", "yes", "resolved to ffffffffff"),
+        ("FIXTURE_NO_MANIFEST", "yes", "has no Cargo.toml"),
+        ("FIXTURE_CARGO_FAIL_FETCH", "yes", "fetch Cargo dependencies failed"),
+        ("FIXTURE_CARGO_FAIL_BUILD", "yes", "failed to build"),
+        ("FIXTURE_CARGO_NO_BINARY", "yes", "cargo build succeeded but"),
+        ("FIXTURE_PUBLISH_FAILURE", "copy", "failed to publish rs-infra-ci"),
+        ("FIXTURE_PUBLISH_FAILURE", "rename", "failed to install rs-infra-ci"),
     ];
-    for (variable, expected) in cases {
+    for (variable, value, expected) in cases {
         let fixture = Fixture::new();
         let output = fixture.command(&["prewarm"])
             .env("RS_INFRA_SHARED_ROOT", fixture.manager())
-            .env(variable, "yes")
+            .env(variable, value)
             .env("RS_INFRA_NETWORK_MAX_ATTEMPTS", "1")
             .env("RS_INFRA_NETWORK_RETRY_DELAY_SECONDS", "0")
             .output().unwrap();
