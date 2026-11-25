@@ -780,6 +780,10 @@ class BootstrapDispatchTests(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertIn(str(lock), result.stderr)
                     self.assertIn("owner:", result.stderr)
+                    self.assertIn(
+                        "Before removing this lock and retrying, confirm that the original bootstrap and its cache-writing child processes have stopped.",
+                        result.stderr,
+                    )
                     self.assertTrue(lock.is_dir())
                     self.assertEqual(pid_file.exists() or pid_file.is_symlink(), pid_state != "missing")
                     if pid_state in {"fifo", "symlink"}:
@@ -1021,6 +1025,11 @@ class BootstrapDispatchTests(unittest.TestCase):
                     competitor = self.run_bootstrap(bootstrap, env)
                     self.assertNotEqual(competitor.returncode, 0, competitor.stdout + competitor.stderr)
                     self.assertIn("timed out waiting for bootstrap lock", competitor.stderr)
+                    self.assertIn(str(lock), competitor.stderr)
+                    self.assertIn(
+                        "Before removing this lock and retrying, confirm that the original bootstrap and its cache-writing child processes have stopped.",
+                        competitor.stderr,
+                    )
                     self.assertTrue(lock.is_dir(), "a competing bootstrap must not remove the parent's lock")
                     cargo_calls = cargo_log.read_text().splitlines()
                     self.assertEqual(len(cargo_calls), 2)
