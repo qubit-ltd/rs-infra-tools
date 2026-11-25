@@ -88,9 +88,9 @@ mod tests {
     use sha2::Digest;
     use sha2::Sha256;
 
-    use super::execute;
     use super::Cli;
     use super::Command;
+    use super::execute;
 
     static ENVIRONMENT_LOCK: Mutex<()> = Mutex::new(());
 
@@ -150,14 +150,8 @@ mod tests {
 
     #[test]
     #[cfg(any(
-        all(
-            target_os = "linux",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        ),
-        all(
-            target_os = "macos",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        )
+        all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")),
+        all(target_os = "macos", any(target_arch = "x86_64", target_arch = "aarch64"))
     ))]
     fn test_execute_reports_successful_child() {
         let _environment_lock = ENVIRONMENT_LOCK.lock().unwrap();

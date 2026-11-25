@@ -271,9 +271,7 @@ mod tests {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn with_test_env<T>(changes: &[(&str, Option<OsString>)], action: impl FnOnce() -> T) -> T {
-        let _lock = ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _lock = ENV_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let saved = changes
             .iter()
             .map(|(key, _)| ((*key).to_owned(), env::var_os(key)))
@@ -362,10 +360,9 @@ mod tests {
     fn test_ensure_rejects_a_different_target_before_cache_access() {
         let source = tempfile::NamedTempFile::new().unwrap();
         let entry = entry("wrong-target-tool", source.path(), "unused");
-        let result = with_test_env(
-            &[("RS_INFRA_TARGET", Some("unsupported-target".into()))],
-            || ensure(&entry),
-        );
+        let result = with_test_env(&[("RS_INFRA_TARGET", Some("unsupported-target".into()))], || {
+            ensure(&entry)
+        });
 
         let error = result.unwrap_err().to_string();
         assert!(error.contains("targets x86_64-unknown-linux-gnu"));
@@ -387,8 +384,9 @@ mod tests {
 
         assert_eq!(
             path,
-            xdg.path()
-                .join("qubit/rs-infra/xdg-tool/0123456789abcdef0123456789abcdef01234567/x86_64-unknown-linux-gnu/xdg-tool")
+            xdg.path().join(
+                "qubit/rs-infra/xdg-tool/0123456789abcdef0123456789abcdef01234567/x86_64-unknown-linux-gnu/xdg-tool"
+            )
         );
     }
 
@@ -433,11 +431,7 @@ mod tests {
         let source = tempfile::NamedTempFile::new().unwrap();
         let entry = entry("no-root-tool", source.path(), "unused");
         let result = with_test_env(
-            &[
-                ("RS_INFRA_CACHE_DIR", None),
-                ("XDG_CACHE_HOME", None),
-                ("HOME", None),
-            ],
+            &[("RS_INFRA_CACHE_DIR", None), ("XDG_CACHE_HOME", None), ("HOME", None)],
             || cache_path(&entry),
         );
 
@@ -459,10 +453,7 @@ mod tests {
 
             let installed = ensure(&entry).unwrap();
             assert_eq!(installed, path);
-            assert_eq!(
-                std::fs::read(installed).unwrap(),
-                b"verified artifact bytes"
-            );
+            assert_eq!(std::fs::read(installed).unwrap(), b"verified artifact bytes");
         });
     }
 
@@ -479,11 +470,13 @@ mod tests {
             assert!(error.contains("SHA-256 mismatch for mismatch-tool"));
             let path = cache_path(&entry).unwrap();
             assert!(!path.exists());
-            assert!(!path
-                .parent()
-                .unwrap()
-                .join(format!(".mismatch-tool.tmp-{}", std::process::id()))
-                .exists());
+            assert!(
+                !path
+                    .parent()
+                    .unwrap()
+                    .join(format!(".mismatch-tool.tmp-{}", std::process::id()))
+                    .exists()
+            );
         });
     }
 
@@ -551,11 +544,7 @@ mod tests {
     #[test]
     fn test_download_reports_an_unavailable_local_https_endpoint() {
         let status = Command::new(env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "cache::tests::test_download_failure_child",
-                "--nocapture",
-            ])
+            .args(["--exact", "cache::tests::test_download_failure_child", "--nocapture"])
             .env("RS_INFRA_CACHE_TEST_DOWNLOAD_CHILD", "1")
             .env("NO_PROXY", "127.0.0.1,localhost")
             .env("no_proxy", "127.0.0.1,localhost")

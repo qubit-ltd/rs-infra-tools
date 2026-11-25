@@ -177,9 +177,7 @@ mod tests {
         let path = directory.path().join("tools.lock");
         fs::write(
             &path,
-            format!(
-                "a file:///a {REVISION} x {SHA}\na file:///b {REVISION} x {SHA}"
-            ),
+            format!("a file:///a {REVISION} x {SHA}\na file:///b {REVISION} x {SHA}"),
         )
         .unwrap();
         let duplicate_error = LockFile::read(&path).unwrap_err();
@@ -218,10 +216,20 @@ mod tests {
 
         invalid = valid_entry.clone();
         invalid.source.clear();
-        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("source and target"));
+        assert!(
+            validate_entry(&invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("source and target")
+        );
 
         invalid = valid_entry;
         invalid.target.clear();
-        assert!(validate_entry(&invalid).unwrap_err().to_string().contains("source and target"));
+        assert!(
+            validate_entry(&invalid)
+                .unwrap_err()
+                .to_string()
+                .contains("source and target")
+        );
     }
 }
