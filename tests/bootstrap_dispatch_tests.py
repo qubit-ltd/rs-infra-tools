@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import shutil
+import signal as signal_module
 import subprocess
 import tempfile
 import time
@@ -862,43 +863,64 @@ class BootstrapDispatchTests(unittest.TestCase):
                 lock.parent.mkdir(parents=True, exist_ok=True)
                 lock.mkdir()
                 (lock / "pid").write_text(f"{os.getpid()}\n")
+                output_path = root / "bootstrap-output.log"
+                output_file = output_path.open("w", encoding="utf-8")
                 child = subprocess.Popen(
                     ["bash", str(bootstrap), ".infra/bin/infra-tool.sh"],
                     env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
+                    stdout=output_file,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
                 )
+
+                def kill_child_group() -> None:
+                    try:
+                        os.killpg(child.pid, signal_module.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+                def child_output() -> str:
+                    output_file.flush()
+                    return output_path.read_text(encoding="utf-8")
+
                 try:
                     deadline = time.monotonic() + 3
                     while not signal.exists() and time.monotonic() < deadline:
                         if child.poll() is not None:
-                            stdout, stderr = child.communicate()
-                            self.fail(f"bootstrap exited before observing held lock: {stdout}{stderr}")
+                            child.wait(timeout=2)
+                            self.fail(f"bootstrap exited before observing held lock: {child_output()}")
                         time.sleep(0.01)
                     self.assertTrue(signal.exists(), "bootstrap did not observe mkdir failure while the test held the lock")
                     self.assertEqual(attempts.read_text().splitlines(), ["failed"])
                     self.assertTrue(lock.exists(), "test lock must remain held until the failure observation")
                     shutil.rmtree(lock)
                     try:
-                        stdout, stderr = child.communicate(timeout=6)
+                        child.wait(timeout=6)
                     except subprocess.TimeoutExpired:
-                        child.kill()
-                        stdout, stderr = child.communicate(timeout=2)
-                        self.fail(f"bootstrap did not finish after lock release: {stdout}{stderr}")
-                    result = subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
-                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-                    self.assertNotIn("timed out", result.stderr)
+                        kill_child_group()
+                        try:
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            self.fail(f"bootstrap did not stop after lock release: {child_output()}")
+                        self.fail(f"bootstrap did not finish after lock release: {child_output()}")
+                    output = child_output()
+                    result = subprocess.CompletedProcess(child.args, child.returncode, output, "")
+                    self.assertEqual(result.returncode, 0, result.stdout)
+                    self.assertNotIn("timed out", result.stdout)
                     self.assertFalse(lock.exists(), "the acquired lock should be cleaned on normal exit")
                     self.assertEqual(attempts.read_text().splitlines(), ["failed", "success"])
                     self.assertEqual(len((root / "cache" / "cargo.log").read_text().splitlines()), 2)
                 finally:
-                    if child.poll() is None:
-                        child.kill()
+                    kill_child_group()
                     try:
-                        child.communicate(timeout=2)
+                        child.wait(timeout=2)
                     except subprocess.TimeoutExpired:
-                        pass
+                        kill_child_group()
+                        try:
+                            child.wait(timeout=2)
+                        except subprocess.TimeoutExpired:
+                            pass
+                    output_file.close()
 
 
 if __name__ == "__main__":
