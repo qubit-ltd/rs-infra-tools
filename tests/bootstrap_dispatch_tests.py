@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -611,6 +612,226 @@ class BootstrapDispatchTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(call_log.read_text().splitlines(), ["project-hook", "--ci-arg"])
+
+    def make_bootstrap_fixture(self, root: Path, bootstrap: Path) -> tuple[dict[str, str], str, Path]:
+        """Build an isolated fake manager cache for exercising a bootstrap entrypoint."""
+        revision = "0123456789abcdef0123456789abcdef01234567"
+        project = root / "project"
+        project.mkdir(parents=True)
+        bin_dir = root / "bin"
+        bin_dir.mkdir()
+        (bin_dir / "git").write_text(
+            "#!/usr/bin/env bash\n"
+            'case "$1" in\n'
+            f'  ls-remote) printf "%s\\trefs/heads/main\\n" "{revision}" ;;\n'
+            '  init)\n'
+            '    mkdir -p "$2/.git" "$2/.infra/lib"\n'
+            "    printf '#!/usr/bin/env bash\\n"
+            'printf "%%s\\n" "${CARGO_TARGET_DIR-<unset>}" >> "$DOWNSTREAM_ENV_LOG"\\n'
+            "exit 0\\n' > \"$2/.infra/lib/infra-tool.sh\"\n"
+            '    chmod +x "$2/.infra/lib/infra-tool.sh" ;;\n'
+            '  -C)\n'
+            '    case "$3" in\n'
+            '      cat-file) exit 1 ;;\n'
+            '      rev-parse) printf "%s\\n" "$FAKE_REVISION" ;;\n'
+            '      *) exit 0 ;;\n'
+            '    esac ;;\n'
+            '  *) exit 0 ;;\n'
+            'esac\n'
+        )
+        (bin_dir / "rustc").write_text(
+            "#!/usr/bin/env bash\n"
+            'if [[ "${1:-}" == -vV ]]; then echo "host: x86_64-unknown-linux-gnu"; '
+            'else echo "rustc 1.94.0 (fake)"; fi\n'
+        )
+        manager_stub = root / "manager-stub"
+        manager_stub.write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "%s\\n" "${CARGO_TARGET_DIR-<unset>}" >> "$DOWNSTREAM_ENV_LOG"\n'
+            'exit 0\n'
+        )
+        manager_stub.chmod(0o755)
+        (bin_dir / "cargo").write_text(
+            "#!/usr/bin/env bash\n"
+            'printf "%s|%s|%s\\n" "$*" "${CARGO_TARGET_DIR-<unset>}" "${PATH}" >> "$CARGO_LOG"\n'
+            'if [[ "${1:-}" == build ]]; then\n'
+            '  mkdir -p "$CARGO_TARGET_DIR/release"\n'
+            '  cp "$MANAGER_STUB" "$CARGO_TARGET_DIR/release/rs-infra-tools"\n'
+            'fi\n'
+        )
+        for command in ("git", "rustc", "cargo"):
+            (bin_dir / command).chmod(0o755)
+        env = os.environ | {
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "HOME": str(root),
+            "XDG_CACHE_HOME": str(root / "cache-home"),
+            "RS_INFRA_PROJECT_ROOT": str(project),
+            "RS_INFRA_NETWORK_MAX_ATTEMPTS": "1",
+            "RS_INFRA_BOOTSTRAP_LOCK_TIMEOUT_SECONDS": "1",
+            "FAKE_REVISION": revision,
+            "CARGO_LOG": str(root / "cargo.log"),
+            "DOWNSTREAM_ENV_LOG": str(root / "downstream-env.log"),
+            "MANAGER_STUB": str(manager_stub),
+        }
+        cache_root = Path(env["XDG_CACHE_HOME"]) / "qubit/rs-infra"
+        lock = cache_root / f"locks/manager-{revision}.lock"
+        return env, revision, lock
+
+    def run_bootstrap(self, bootstrap: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(bootstrap), ".infra/bin/infra-tool.sh"],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=6,
+        )
+
+    def test_bootstrap_manager_build_keeps_target_environment_local(self) -> None:
+        for bootstrap in (REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh", REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh"):
+            for original_target in (None, "", "/tmp/original-project-target"):
+                with self.subTest(bootstrap=bootstrap, original_target=original_target), tempfile.TemporaryDirectory(prefix="bootstrap-manager-env-") as temp:
+                    root = Path(temp)
+                    env, revision, _ = self.make_bootstrap_fixture(root, bootstrap)
+                    if original_target is None:
+                        env.pop("CARGO_TARGET_DIR", None)
+                    else:
+                        env["CARGO_TARGET_DIR"] = original_target
+                    first = self.run_bootstrap(bootstrap, env)
+                    self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
+                    cargo_lines = (root / "cargo.log").read_text().splitlines()
+                    self.assertEqual(len(cargo_lines), 2)
+                    manager_target = f"{root}/cache-home/qubit/rs-infra/build/manager/{revision}/x86_64-unknown-linux-gnu/rustc_1.94.0_(fake)"
+                    self.assertTrue(cargo_lines[-1].startswith("build "))
+                    self.assertEqual(cargo_lines[-1].split("|", 1)[1].split("|", 1)[0], manager_target)
+                    expected = "<unset>" if original_target is None else original_target
+                    self.assertEqual((root / "downstream-env.log").read_text().splitlines(), [expected])
+                    second = self.run_bootstrap(bootstrap, env)
+                    self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
+                    self.assertEqual(len((root / "cargo.log").read_text().splitlines()), 2)
+                    self.assertEqual((root / "downstream-env.log").read_text().splitlines(), [expected, expected])
+
+    def test_bootstrap_lock_timeout_requires_a_bounded_decimal_value(self) -> None:
+        for bootstrap in (REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh", REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh"):
+            for timeout in ("", "0", "86401", "not-a-number", "999999999999999999999"):
+                with self.subTest(bootstrap=bootstrap, timeout=timeout), tempfile.TemporaryDirectory(prefix="bootstrap-lock-timeout-") as temp:
+                    root = Path(temp)
+                    env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                    env["RS_INFRA_BOOTSTRAP_LOCK_TIMEOUT_SECONDS"] = timeout
+                    result = self.run_bootstrap(bootstrap, env)
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn("invalid bootstrap lock timeout", result.stderr)
+                    self.assertIn(str(lock), result.stderr)
+                    self.assertFalse(lock.exists())
+
+    def test_bootstrap_lock_rejects_stale_or_malformed_owners_without_removing_lock(self) -> None:
+        for bootstrap in (REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh", REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh"):
+            for pid_state in ("missing", "empty", "invalid", "dead", "fifo", "symlink"):
+                with self.subTest(bootstrap=bootstrap, pid_state=pid_state), tempfile.TemporaryDirectory(prefix="bootstrap-stale-lock-") as temp:
+                    root = Path(temp)
+                    env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                    lock.mkdir(parents=True)
+                    pid_file = lock / "pid"
+                    if pid_state == "empty":
+                        pid_file.write_text("")
+                    elif pid_state == "invalid":
+                        pid_file.write_text("not-a-pid\n")
+                    elif pid_state == "dead":
+                        pid_file.write_text("2147483647\n")
+                    elif pid_state == "fifo":
+                        os.mkfifo(pid_file)
+                    elif pid_state == "symlink":
+                        pid_file.symlink_to(root / "missing-target")
+                    result = self.run_bootstrap(bootstrap, env)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn(str(lock), result.stderr)
+                    self.assertIn("owner:", result.stderr)
+                    self.assertTrue(lock.is_dir())
+                    self.assertEqual(pid_file.exists() or pid_file.is_symlink(), pid_state != "missing")
+                    if pid_state in {"fifo", "symlink"}:
+                        self.assertIn("pid is not a regular file", result.stderr)
+
+    def test_bootstrap_lock_reports_path_failures_and_cleans_failed_owner_write(self) -> None:
+        bootstraps = (REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh", REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh")
+        for bootstrap in bootstraps:
+            with self.subTest(bootstrap=bootstrap, failure="file"), tempfile.TemporaryDirectory(prefix="bootstrap-lock-file-") as temp:
+                root = Path(temp)
+                env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                lock.parent.mkdir(parents=True)
+                lock.write_text("not a directory")
+                result = self.run_bootstrap(bootstrap, env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(str(lock), result.stderr)
+                self.assertIn("not a directory", result.stderr)
+                self.assertTrue(lock.is_file())
+
+            with self.subTest(bootstrap=bootstrap, failure="mkdir"), tempfile.TemporaryDirectory(prefix="bootstrap-lock-mkdir-") as temp:
+                root = Path(temp)
+                env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                fake_bin = Path(env["PATH"].split(":", 1)[0])
+                real_mkdir = shutil.which("mkdir")
+                (fake_bin / "mkdir").write_text(
+                    "#!/usr/bin/env bash\n"
+                    f'if [[ "$1" == "{lock}" ]]; then echo "controlled mkdir failure" >&2; exit 73; fi\n'
+                    f'exec "{real_mkdir}" "$@"\n'
+                )
+                (fake_bin / "mkdir").chmod(0o755)
+                result = self.run_bootstrap(bootstrap, env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(str(lock), result.stderr)
+                self.assertIn("controlled mkdir failure", result.stderr)
+                self.assertIn("last mkdir error:", result.stderr)
+                self.assertFalse(lock.exists())
+
+            with self.subTest(bootstrap=bootstrap, failure="pid-write"), tempfile.TemporaryDirectory(prefix="bootstrap-lock-pid-") as temp:
+                root = Path(temp)
+                env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                fake_bin = Path(env["PATH"].split(":", 1)[0])
+                real_mkdir = shutil.which("mkdir")
+                (fake_bin / "mkdir").write_text(
+                    "#!/usr/bin/env bash\n"
+                    f'if [[ "$1" == "{lock}" ]]; then\n'
+                    f'  "{real_mkdir}" "$@" || exit $?\n'
+                    f'  "{real_mkdir}" "$1/pid"\n'
+                    '  exit 0\n'
+                    'fi\n'
+                    f'exec "{real_mkdir}" "$@"\n'
+                )
+                (fake_bin / "mkdir").chmod(0o755)
+                result = self.run_bootstrap(bootstrap, env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(str(lock), result.stderr)
+                self.assertIn("unable to write bootstrap lock owner", result.stderr)
+                self.assertFalse(lock.exists(), "the owner must clean the lock directory it acquired")
+
+    def test_bootstrap_lock_waits_for_holder_and_acquires_after_holder_exits(self) -> None:
+        for bootstrap in (REPO / "assets/project-bootstrap/files/.infra/bootstrap.sh", REPO / ".infra/bootstrap.sh", REPO / "assets/bootstrap.sh"):
+            with self.subTest(bootstrap=bootstrap), tempfile.TemporaryDirectory(prefix="bootstrap-lock-contention-") as temp:
+                root = Path(temp)
+                env, _, lock = self.make_bootstrap_fixture(root, bootstrap)
+                env["RS_INFRA_BOOTSTRAP_LOCK_TIMEOUT_SECONDS"] = "5"
+                lock.parent.mkdir(parents=True, exist_ok=True)
+                holder = subprocess.Popen(
+                    ["bash", "-c", 'mkdir "$1"; printf "%s\\n" "$$" > "$1/pid"; sleep 2; rm -rf -- "$1"', "holder", str(lock)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    text=True,
+                )
+                try:
+                    for _ in range(100):
+                        if (lock / "pid").exists():
+                            break
+                        if holder.poll() is not None:
+                            self.fail("lock holder exited before publishing its pid")
+                        time.sleep(0.01)
+                    result = self.run_bootstrap(bootstrap, env)
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertNotIn("timed out", result.stderr)
+                    self.assertFalse(lock.exists(), "the acquired lock should be cleaned on normal exit")
+                    self.assertEqual(len((root / "cargo.log").read_text().splitlines()), 2)
+                finally:
+                    if holder.poll() is None:
+                        holder.terminate()
+                    holder.wait(timeout=3)
 
 
 if __name__ == "__main__":
