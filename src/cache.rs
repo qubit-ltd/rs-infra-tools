@@ -255,11 +255,77 @@ pub fn run(path: &Path, args: &[String]) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use std::env;
+    use std::ffi::OsString;
     use std::io::Write;
+    use std::path::Path;
+    use std::process::Command;
+    use std::sync::Mutex;
 
+    use super::cache_path;
     use super::digest;
+    use super::download;
     use super::ensure;
+    use super::run;
     use crate::lock::LockEntry;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_test_env<T>(changes: &[(&str, Option<OsString>)], action: impl FnOnce() -> T) -> T {
+        let _lock = ENV_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let saved = changes
+            .iter()
+            .map(|(key, _)| ((*key).to_owned(), env::var_os(key)))
+            .collect::<Vec<_>>();
+
+        for (key, value) in changes {
+            unsafe {
+                match value {
+                    Some(value) => env::set_var(key, value),
+                    None => env::remove_var(key),
+                }
+            }
+        }
+
+        struct RestoreEnv(Vec<(String, Option<OsString>)>);
+
+        impl Drop for RestoreEnv {
+            fn drop(&mut self) {
+                for (key, value) in &self.0 {
+                    unsafe {
+                        match value {
+                            Some(value) => env::set_var(key, value),
+                            None => env::remove_var(key),
+                        }
+                    }
+                }
+            }
+        }
+
+        let _restore = RestoreEnv(saved);
+        action()
+    }
+
+    fn entry(name: &str, source: &Path, sha256: &str) -> LockEntry {
+        LockEntry {
+            name: name.into(),
+            source: format!("file://{}", source.display()),
+            revision: "0123456789abcdef0123456789abcdef01234567".into(),
+            target: "x86_64-unknown-linux-gnu".into(),
+            sha256: sha256.into(),
+        }
+    }
+
+    fn with_cache<T>(cache: &Path, action: impl FnOnce() -> T) -> T {
+        with_test_env(
+            &[
+                ("RS_INFRA_CACHE_DIR", Some(cache.as_os_str().to_owned())),
+                ("RS_INFRA_TARGET", Some("x86_64-unknown-linux-gnu".into())),
+            ],
+            action,
+        )
+    }
 
     #[test]
     fn test_digest_encodes_sha256_as_lowercase_hex() {
@@ -279,18 +345,288 @@ mod tests {
         file.write_all(b"#!/bin/sh\nprintf cached\n").unwrap();
         let digest = digest(source.path()).unwrap();
         let cache = tempfile::tempdir().unwrap();
-        unsafe {
-            env::set_var("RS_INFRA_CACHE_DIR", cache.path());
-        }
-        let entry = LockEntry {
-            name: "fake-tool".into(),
-            source: format!("file://{}", source.path().display()),
-            revision: "0123456789abcdef0123456789abcdef01234567".into(),
-            target: "x86_64-unknown-linux-gnu".into(),
-            sha256: digest,
+        let entry = entry("fake-tool", source.path(), &digest);
+
+        with_cache(cache.path(), || {
+            let path = ensure(&entry).unwrap();
+            assert!(path.is_file());
+            assert_eq!(std::fs::read(&path).unwrap(), b"#!/bin/sh\nprintf cached\n");
+
+            std::fs::write(source.path(), b"changed source").unwrap();
+            assert_eq!(ensure(&entry).unwrap(), path);
+            assert_eq!(std::fs::read(path).unwrap(), b"#!/bin/sh\nprintf cached\n");
+        });
+    }
+
+    #[test]
+    fn test_ensure_rejects_a_different_target_before_cache_access() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let entry = entry("wrong-target-tool", source.path(), "unused");
+        let result = with_test_env(
+            &[("RS_INFRA_TARGET", Some("unsupported-target".into()))],
+            || ensure(&entry),
+        );
+
+        let error = result.unwrap_err().to_string();
+        assert!(error.contains("targets x86_64-unknown-linux-gnu"));
+        assert!(error.contains("current platform is unsupported-target"));
+    }
+
+    #[test]
+    fn test_cache_path_uses_xdg_root_when_explicit_cache_is_missing() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let entry = entry("xdg-tool", source.path(), "unused");
+        let xdg = tempfile::tempdir().unwrap();
+        let path = with_test_env(
+            &[
+                ("RS_INFRA_CACHE_DIR", None),
+                ("XDG_CACHE_HOME", Some(xdg.path().as_os_str().to_owned())),
+            ],
+            || cache_path(&entry).unwrap(),
+        );
+
+        assert_eq!(
+            path,
+            xdg.path()
+                .join("qubit/rs-infra/xdg-tool/0123456789abcdef0123456789abcdef01234567/x86_64-unknown-linux-gnu/xdg-tool")
+        );
+    }
+
+    #[test]
+    fn test_cache_path_uses_home_fallback_when_other_roots_are_missing() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let entry = entry("home-tool", source.path(), "unused");
+        let home = tempfile::tempdir().unwrap();
+        let path = with_test_env(
+            &[
+                ("RS_INFRA_CACHE_DIR", None),
+                ("XDG_CACHE_HOME", None),
+                ("HOME", Some(home.path().as_os_str().to_owned())),
+            ],
+            || cache_path(&entry).unwrap(),
+        );
+
+        assert_eq!(
+            path,
+            home.path()
+                .join(".cache/qubit/rs-infra/home-tool/0123456789abcdef0123456789abcdef01234567/x86_64-unknown-linux-gnu/home-tool")
+        );
+    }
+
+    #[test]
+    fn test_host_target_matches_the_current_platform() {
+        let expected = match (std::env::consts::ARCH, std::env::consts::OS) {
+            ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+            ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+            ("x86_64", "macos") => "x86_64-apple-darwin",
+            ("aarch64", "macos") => "aarch64-apple-darwin",
+            ("x86_64", "windows") => "x86_64-pc-windows-msvc",
+            ("aarch64", "windows") => "aarch64-pc-windows-msvc",
+            _ => "unsupported",
         };
-        let path = ensure(&entry).unwrap();
-        assert!(path.is_file());
-        assert_eq!(ensure(&entry).unwrap(), path);
+
+        assert_eq!(super::host_target(), expected);
+    }
+
+    #[test]
+    fn test_cache_path_requires_a_root_when_all_fallbacks_are_missing() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let entry = entry("no-root-tool", source.path(), "unused");
+        let result = with_test_env(
+            &[
+                ("RS_INFRA_CACHE_DIR", None),
+                ("XDG_CACHE_HOME", None),
+                ("HOME", None),
+            ],
+            || cache_path(&entry),
+        );
+
+        assert!(result.unwrap_err().to_string().contains("HOME must be set"));
+    }
+
+    #[test]
+    fn test_ensure_replaces_corrupt_cached_contents_with_verified_source() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), b"verified artifact bytes").unwrap();
+        let digest = digest(source.path()).unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let entry = entry("repair-tool", source.path(), &digest);
+
+        with_cache(cache.path(), || {
+            let path = cache_path(&entry).unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"corrupt bytes").unwrap();
+
+            let installed = ensure(&entry).unwrap();
+            assert_eq!(installed, path);
+            assert_eq!(
+                std::fs::read(installed).unwrap(),
+                b"verified artifact bytes"
+            );
+        });
+    }
+
+    #[test]
+    fn test_ensure_rejects_digest_mismatch_and_removes_temporary_file() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), b"unexpected artifact").unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let entry = entry("mismatch-tool", source.path(), &"0".repeat(64));
+
+        with_cache(cache.path(), || {
+            let result = ensure(&entry);
+            let error = result.unwrap_err().to_string();
+            assert!(error.contains("SHA-256 mismatch for mismatch-tool"));
+            let path = cache_path(&entry).unwrap();
+            assert!(!path.exists());
+            assert!(!path
+                .parent()
+                .unwrap()
+                .join(format!(".mismatch-tool.tmp-{}", std::process::id()))
+                .exists());
+        });
+    }
+
+    #[test]
+    fn test_ensure_reports_a_missing_local_source() {
+        let cache = tempfile::tempdir().unwrap();
+        let source = cache.path().join("missing-source");
+        let entry = entry("missing-source-tool", &source, &"0".repeat(64));
+
+        with_cache(cache.path(), || {
+            let error = ensure(&entry).unwrap_err().to_string();
+            assert!(error.contains("failed to copy local artifact"));
+            assert!(!cache_path(&entry).unwrap().exists());
+        });
+    }
+
+    #[test]
+    fn test_ensure_reports_cache_directory_creation_failure() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), b"artifact").unwrap();
+        let digest = digest(source.path()).unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        std::fs::write(cache.path().join("rs-infra"), b"not a directory").unwrap();
+        let entry = entry("blocked-cache-tool", source.path(), &digest);
+
+        with_cache(cache.path(), || {
+            let error = ensure(&entry).unwrap_err().to_string();
+            assert!(error.contains("failed to create cache directory"));
+            assert_eq!(
+                std::fs::read(cache.path().join("rs-infra")).unwrap(),
+                b"not a directory"
+            );
+        });
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ensure_reports_installation_failure_without_losing_download() {
+        let source = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(source.path(), b"verified artifact").unwrap();
+        let digest = digest(source.path()).unwrap();
+        let cache = tempfile::tempdir().unwrap();
+        let entry = entry("blocked-install-tool", source.path(), &digest);
+
+        with_cache(cache.path(), || {
+            let path = cache_path(&entry).unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::create_dir(&path).unwrap();
+
+            let error = ensure(&entry).unwrap_err().to_string();
+            assert!(error.contains("failed to install blocked-install-tool"));
+            assert!(path.is_dir());
+            assert_eq!(
+                std::fs::read(
+                    path.parent()
+                        .unwrap()
+                        .join(format!(".blocked-install-tool.tmp-{}", std::process::id()))
+                )
+                .unwrap(),
+                b"verified artifact"
+            );
+        });
+    }
+
+    #[test]
+    fn test_download_reports_an_unavailable_local_https_endpoint() {
+        let status = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cache::tests::test_download_failure_child",
+                "--nocapture",
+            ])
+            .env("RS_INFRA_CACHE_TEST_DOWNLOAD_CHILD", "1")
+            .env("NO_PROXY", "127.0.0.1,localhost")
+            .env("no_proxy", "127.0.0.1,localhost")
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn test_download_failure_child() {
+        if env::var_os("RS_INFRA_CACHE_TEST_DOWNLOAD_CHILD").is_none() {
+            return;
+        }
+
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let mut entry = entry("https-tool", source.path(), "unused");
+        entry.source = "https://127.0.0.1:1/unavailable".into();
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("download.tmp");
+
+        let error = download(&entry, &destination).unwrap_err().to_string();
+        assert!(error.contains("failed to download"));
+        assert!(!destination.exists());
+    }
+
+    #[test]
+    fn test_download_reports_missing_curl_without_process_environment_changes() {
+        let empty_path = tempfile::tempdir().unwrap();
+        let status = Command::new(env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cache::tests::test_download_start_failure_child",
+                "--nocapture",
+            ])
+            .env("RS_INFRA_CACHE_TEST_CURL_START_CHILD", "1")
+            .env("PATH", empty_path.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+    }
+
+    #[test]
+    fn test_download_start_failure_child() {
+        if env::var_os("RS_INFRA_CACHE_TEST_CURL_START_CHILD").is_none() {
+            return;
+        }
+
+        let source = tempfile::NamedTempFile::new().unwrap();
+        let mut entry = entry("missing-curl-tool", source.path(), "unused");
+        entry.source = "https://127.0.0.1/unavailable".into();
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("download.tmp");
+
+        let error = download(&entry, &destination).unwrap_err().to_string();
+        assert!(error.contains("failed to start curl"));
+        assert!(!destination.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_run_returns_exit_status_and_reports_start_failure() {
+        let success = run(Path::new("/bin/sh"), &["-c".into(), "exit 0".into()]).unwrap();
+        assert_eq!(success, 0);
+
+        let failure = run(Path::new("/bin/sh"), &["-c".into(), "exit 23".into()]).unwrap();
+        assert_eq!(failure, 23);
+
+        let signal = run(Path::new("/bin/sh"), &["-c".into(), "kill -TERM $$".into()]).unwrap();
+        assert_eq!(signal, 1);
+
+        let missing = run(Path::new("/definitely/missing/rs-infra-tool"), &[]);
+        assert!(missing.is_err());
     }
 }
