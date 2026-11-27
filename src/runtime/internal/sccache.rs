@@ -26,6 +26,10 @@ use crate::cache::make_executable;
 const VERSION: &str = "v0.20.1";
 
 /// Returns a managed binary directory when a supported host needs sccache.
+///
+/// # Parameters
+///
+/// * `cache` - Root of the shared infrastructure tool cache.
 pub(super) fn prepare(cache: &Path) -> Option<PathBuf> {
     const WRAPPERS: [&str; 4] = [
         "RUSTC_WRAPPER",
@@ -61,6 +65,11 @@ pub(super) fn prepare(cache: &Path) -> Option<PathBuf> {
 }
 
 /// Maps supported operating systems and architectures to pinned release assets.
+///
+/// # Parameters
+///
+/// * `os` - Operating system name.
+/// * `arch` - CPU architecture name.
 fn release(os: &str, arch: &str) -> Option<(&'static str, &'static str)> {
     Some(match (os, arch) {
         ("linux", "x86_64") => (
@@ -92,6 +101,13 @@ fn release(os: &str, arch: &str) -> Option<(&'static str, &'static str)> {
 }
 
 /// Verifies the archive before extracting and atomically installing its binary.
+///
+/// # Parameters
+///
+/// * `cache` - Root of the shared infrastructure tool cache.
+/// * `target` - Target triple of the release asset.
+/// * `checksum` - Expected SHA-256 digest of the archive.
+/// * `fetch` - Operation that writes the release archive to the given path.
 fn ensure(
     cache: &Path,
     target: &str,
@@ -101,11 +117,7 @@ fn ensure(
     let directory = cache.join("tools/sccache").join(VERSION).join(target);
     let executable = executable_file_name("sccache");
     let destination = directory.join(&executable);
-    let _lock = CacheLock::acquire(
-        &cache
-            .join("locks")
-            .join(format!("sccache-{VERSION}-{target}.lock")),
-    )?;
+    let _lock = CacheLock::acquire(&cache.join("locks").join(format!("sccache-{VERSION}-{target}.lock")))?;
     if destination.is_file() {
         return Ok(directory);
     }
@@ -114,13 +126,9 @@ fn ensure(
     let staged = tempfile::tempdir_in(&directory)?;
     let archive = staged.path().join("sccache.tar.gz");
     let release = format!("sccache-{VERSION}-{target}");
-    let url =
-        format!("https://github.com/mozilla/sccache/releases/download/{VERSION}/{release}.tar.gz");
+    let url = format!("https://github.com/mozilla/sccache/releases/download/{VERSION}/{release}.tar.gz");
     fetch(&url, &archive)?;
-    require!(
-        digest(&archive)? == checksum,
-        "SHA-256 mismatch for {release}"
-    );
+    require!(digest(&archive)? == checksum, "SHA-256 mismatch for {release}");
 
     let staged_binary = staged.path().join(&executable);
     let status = Command::new("tar")
@@ -142,6 +150,11 @@ fn ensure(
 }
 
 /// Fetches a release archive with a bounded HTTPS request.
+///
+/// # Parameters
+///
+/// * `url` - HTTPS URL of the pinned release archive.
+/// * `destination` - Path receiving the downloaded archive.
 fn download(url: &str, destination: &Path) -> Result<()> {
     let status = Command::new("curl")
         .args([
@@ -172,9 +185,7 @@ mod tests {
 
         let fixture = tempfile::tempdir().unwrap();
         let host = "x86_64-unknown-linux-musl";
-        let source = fixture
-            .path()
-            .join(format!("sccache-{}-{host}", super::VERSION));
+        let source = fixture.path().join(format!("sccache-{}-{host}", super::VERSION));
         fs::create_dir(&source).unwrap();
         let executable = super::super::executable_file_name("sccache");
         fs::write(source.join(&executable), b"test binary").unwrap();
@@ -202,10 +213,7 @@ mod tests {
         let path = install(&checksum).unwrap();
         assert_eq!(fs::read(path.join(&executable)).unwrap(), b"test binary");
         assert_eq!(
-            super::ensure(&cache, host, &checksum, |_, _| panic!(
-                "must reuse installed cache"
-            ))
-            .unwrap(),
+            super::ensure(&cache, host, &checksum, |_, _| panic!("must reuse installed cache")).unwrap(),
             path
         );
     }

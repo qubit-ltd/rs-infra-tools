@@ -120,11 +120,12 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
         "RS_INFRA_TOOLS_BIN",
         env::current_exe().context("failed to resolve current executable")?,
     );
-    let compiler_cache = if selected.name == "rs-infra-ci" && args.iter().any(|arg| matches!(arg.as_str(), "check" | "run")) {
-        sccache::prepare(&cache)
-    } else {
-        None
-    };
+    let compiler_cache =
+        if selected.name == "rs-infra-ci" && args.iter().any(|arg| matches!(arg.as_str(), "check" | "run")) {
+            sccache::prepare(&cache)
+        } else {
+            None
+        };
     let paths = std::iter::once(bin_dir.as_path()).chain(compiler_cache.as_deref());
     command.env("PATH", prepend_paths(paths));
     for item in &resolved {
