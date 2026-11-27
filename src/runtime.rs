@@ -26,6 +26,8 @@ use sha2::Sha256;
 #[path = "runtime/internal/cache_lock.rs"]
 mod cache_lock;
 mod resolved_tool;
+#[path = "runtime/internal/sccache.rs"]
+mod sccache;
 #[path = "runtime/internal/style_install.rs"]
 mod style_install;
 mod tool;
@@ -118,7 +120,13 @@ pub fn run_latest(project: &Path, tool: &str, args: &[String]) -> Result<i32> {
         "RS_INFRA_TOOLS_BIN",
         env::current_exe().context("failed to resolve current executable")?,
     );
-    command.env("PATH", prepend_path(&bin_dir));
+    let compiler_cache = if selected.name == "rs-infra-ci" && args.iter().any(|arg| matches!(arg.as_str(), "check" | "run")) {
+        sccache::prepare(&cache)
+    } else {
+        None
+    };
+    let paths = std::iter::once(bin_dir.as_path()).chain(compiler_cache.as_deref());
+    command.env("PATH", prepend_paths(paths));
     for item in &resolved {
         eprintln!("rs-infra: {}@{} ({host})", item.tool.name, item.revision);
     }
@@ -581,9 +589,9 @@ fn rustc_release() -> Result<String> {
 ///
 /// # Parameters
 ///
-/// - `path`: invocation bin directory to prepend.
-fn prepend_path(path: &Path) -> std::ffi::OsString {
-    let mut paths = vec![path.to_path_buf()];
+/// - `directories`: managed bin directories to prepend in priority order.
+fn prepend_paths<'a>(directories: impl IntoIterator<Item = &'a Path>) -> std::ffi::OsString {
+    let mut paths: Vec<_> = directories.into_iter().map(Path::to_path_buf).collect();
     if let Some(existing) = env::var_os("PATH") {
         paths.extend(env::split_paths(&existing));
     }

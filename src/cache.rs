@@ -181,7 +181,7 @@ fn download(entry: &LockEntry, destination: &Path) -> Result<()> {
 /// # Errors
 ///
 /// Returns an error when the file cannot be opened or read.
-fn digest(path: &Path) -> Result<String> {
+pub(crate) fn digest(path: &Path) -> Result<String> {
     let mut file = fs::File::open(path)?;
     let mut hasher = Sha256::new();
     let mut buffer = [0; 8192];
@@ -206,7 +206,7 @@ fn digest(path: &Path) -> Result<String> {
 ///
 /// Returns an error when metadata lookup or permission update fails.
 #[cfg(unix)]
-fn make_executable(path: &Path) -> Result<()> {
+pub(crate) fn make_executable(path: &Path) -> Result<()> {
     use std::os::unix::fs::PermissionsExt;
     let mut permissions = fs::metadata(path)?.permissions();
     permissions.set_mode(0o755);
@@ -225,7 +225,7 @@ fn make_executable(path: &Path) -> Result<()> {
 ///
 /// Always succeeds without changing the artifact.
 #[cfg(not(unix))]
-fn make_executable(_path: &Path) -> Result<()> {
+pub(crate) fn make_executable(_path: &Path) -> Result<()> {
     Ok(())
 }
 
